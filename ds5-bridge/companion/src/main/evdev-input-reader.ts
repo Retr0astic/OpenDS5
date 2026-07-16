@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { createReadStream, readdirSync, readFileSync } from 'node:fs';
 import type { ControllerInputState } from '../shared/trigger-modifier-eval';
+import type { ControllerButton } from '../shared/controller-input';
 
 const EVENT_SIZE = 24;
 const EV_SYN = 0;
@@ -9,7 +10,10 @@ const EV_ABS = 3;
 const ABS_Z = 2;
 const ABS_RZ = 5;
 
-const BUTTON_NAMES: Record<number, string> = {
+// Codes verified against /usr/include/linux/input-event-codes.h. DualSense's
+// physical gamepad node reports its extra controls using these generic evdev
+// names; the node selector below excludes the touchpad/sensor/headset nodes.
+const BUTTON_NAMES: Record<number, ControllerButton> = {
   0x130: 'cross',
   0x131: 'circle',
   0x133: 'triangle',
@@ -17,7 +21,16 @@ const BUTTON_NAMES: Record<number, string> = {
   0x136: 'l1',
   0x137: 'r1',
   0x13d: 'l3',
-  0x13e: 'r3'
+  0x13e: 'r3',
+  0x13a: 'create',
+  0x13b: 'options',
+  0x13c: 'ps',
+  0x14a: 'touchpad',
+  248: 'mute',
+  0x220: 'dpad-up',
+  0x221: 'dpad-down',
+  0x222: 'dpad-left',
+  0x223: 'dpad-right'
 };
 
 // Lowest word of the abs capability bitmask; bit 2 = ABS_Z (L2),
@@ -89,7 +102,7 @@ export class EvdevInputReader extends EventEmitter {
   private pending: Buffer = Buffer.alloc(0);
   private l2 = 0;
   private r2 = 0;
-  private buttons = new Set<string>();
+  private buttons = new Set<ControllerButton>();
 
   constructor(options: ReaderOptions = {}) {
     super();
@@ -122,6 +135,9 @@ export class EvdevInputReader extends EventEmitter {
     }
     this.stream = null;
     this.pending = Buffer.alloc(0);
+    this.buttons.clear();
+    this.l2 = 0;
+    this.r2 = 0;
   }
 
   private consume(chunk: Buffer): void {

@@ -1,10 +1,12 @@
 import type { ModifierCondition, TriggerEffectSpec, TriggerProfile, TriggerSlotConfig } from './trigger-profiles';
+import type { ControllerButton } from './controller-input';
+export type { ControllerButton } from './controller-input';
 
 export interface ControllerInputState {
   timestampMs: number;
   l2: number;
   r2: number;
-  buttons: ReadonlySet<string>;
+  buttons: ReadonlySet<ControllerButton>;
 }
 
 export interface ResolvedTriggerEffects {
