@@ -135,7 +135,7 @@ import type {
   TriggerTestMode,
   TriggerTestTarget
 } from '../shared/protocol';
-import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset } from '../shared/types';
+import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset, WirePlumberConfigReport } from '../shared/types';
 import type { UpdateState } from '../main/update-service';
 import { UpdateToast } from './UpdateToast';
 import {
@@ -2803,6 +2803,9 @@ export function App() {
   const [audioHapticsSessions, setAudioHapticsSessions] = useState<AudioHapticsSession[]>([]);
   const [audioOutputDevices, setAudioOutputDevices] = useState<AudioOutputDevice[]>([]);
   const [audioHapticsSessionsLoading, setAudioHapticsSessionsLoading] = useState(false);
+  const [wirePlumberRepairStatus, setWirePlumberRepairStatus] = useState<WirePlumberConfigReport | null>(null);
+  const [wirePlumberRepairBusy, setWirePlumberRepairBusy] = useState(false);
+  const [wirePlumberRepairMessage, setWirePlumberRepairMessage] = useState<string | null>(null);
   const [triggerProfiles, setTriggerProfiles] = useState<TriggerProfile[]>([]);
   const [triggerProfilesEnabled, setTriggerProfilesEnabled] = useState(false);
   const [triggerProfileEngineStatus, setTriggerProfileEngineStatus] = useState<EngineStatus | null>(null);
@@ -2815,6 +2818,13 @@ export function App() {
   const [gameCreateBusy, setGameCreateBusy] = useState(false);
   const [gameCreateCandidates, setGameCreateCandidates] = useState<GameProcessCandidate[] | null>(null);
   const [gameCreateDetectLoading, setGameCreateDetectLoading] = useState(false);
+
+  useEffect(() => {
+    if (!window.bridge.isLinux) return;
+    void window.bridge.getLinuxHapticsRepairStatus()
+      .then(setWirePlumberRepairStatus)
+      .catch(() => setWirePlumberRepairStatus(null));
+  }, []);
   const [installedGames, setInstalledGames] = useState<InstalledGamesList | null>(null);
   const [installedGamesLoading, setInstalledGamesLoading] = useState(false);
   const [selectedInstalledGame, setSelectedInstalledGame] = useState<InstalledGamesList['games'][number] | null>(null);
@@ -4430,6 +4440,28 @@ export function App() {
       setSnapshot(next);
     } finally {
       setPendingAction(null);
+    }
+  }
+
+  async function repairLinuxHaptics() {
+    if (wirePlumberRepairBusy || !window.confirm('Back up and replace only OpenDS5\'s managed WirePlumber file, then restart WirePlumber?')) {
+      return;
+    }
+    setWirePlumberRepairBusy(true);
+    setWirePlumberRepairMessage(null);
+    try {
+      const result = await window.bridge.repairLinuxHaptics(true);
+      setSnapshot(result.snapshot);
+      setWirePlumberRepairStatus(result.config);
+      setWirePlumberRepairMessage(result.reload === 'ready'
+        ? 'Repair completed; the tagged endpoint is ready. Physical vibration is not claimed by this status.'
+        : result.reload === 'reload-required'
+          ? 'Repair completed, but WirePlumber still requires a user-service reload: systemctl --user restart wireplumber.'
+          : 'Repair completed, but WirePlumber restart failed.');
+    } catch (error) {
+      setWirePlumberRepairMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setWirePlumberRepairBusy(false);
     }
   }
 
@@ -8223,6 +8255,26 @@ export function App() {
                       <strong>{activeFeedbackStatusLabel}</strong>
                     </span>
                   </div>
+                  {window.bridge.isLinux && !showClassicRumbleControl && (
+                    <div className="feature-status test-status">
+                      <span>Endpoint: {snapshot.diagnostics.linuxHapticsEndpoint?.status ?? 'unknown'}</span>
+                      {wirePlumberRepairStatus && !['current', 'package-managed', 'symlink', 'non-regular', 'unavailable'].includes(wirePlumberRepairStatus.status) && (
+                        <button
+                          className="secondary-action"
+                          type="button"
+                          disabled={wirePlumberRepairBusy}
+                          onClick={() => void repairLinuxHaptics()}
+                        >
+                          {wirePlumberRepairBusy ? 'Repairing…' : 'Repair'}
+                        </button>
+                      )}
+                      {wirePlumberRepairStatus?.status === 'package-managed' && <span>Managed by package/Nix; edit the system configuration.</span>}
+                      {(wirePlumberRepairStatus?.status === 'symlink' || wirePlumberRepairStatus?.status === 'non-regular') && (
+                        <span>Protected path; replace the symlink or non-regular entry manually, then recheck.</span>
+                      )}
+                    </div>
+                  )}
+                  {wirePlumberRepairMessage && <p className="test-error" role="status">{wirePlumberRepairMessage}</p>}
                   {feedbackTestError && <p className="test-error" role="alert">{feedbackTestError}</p>}
                 </section>
               </div>
@@ -10675,6 +10727,10 @@ export function App() {
                         </div>
                         <div><dt>Last ACK</dt><dd>{ackText}</dd></div>
                         <div><dt>HID Path</dt><dd>{snapshot.diagnostics.hidPath ?? '--'}</dd></div>
+                        <div>
+                          <dt>HD Haptics Endpoint</dt>
+                          <dd>{snapshot.diagnostics.linuxHapticsEndpoint?.status ?? '--'}</dd>
+                        </div>
                         <div>
                           <dt>Audio Log</dt>
                           <dd title={snapshot.diagnostics.audioDebugLogPath ?? undefined}>

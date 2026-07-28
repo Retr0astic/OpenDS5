@@ -172,6 +172,11 @@ export interface BridgeDiagnostics {
   feedbackTraceLines: string[];
   feedbackTraceDroppedCount: number;
   audioStatus: AudioStatusPayload | null;
+  linuxHapticsEndpoint: {
+    status: string;
+    nodeName?: string;
+    detail?: string;
+  } | null;
 }
 
 export interface BridgeSnapshot {
@@ -180,6 +185,21 @@ export interface BridgeSnapshot {
   status: BridgeStatusPayload | null;
   settings: CompanionSettings;
   diagnostics: BridgeDiagnostics;
+}
+
+export type WirePlumberConfigStatus =
+  | 'current' | 'known-legacy' | 'modified' | 'missing' | 'unreadable' | 'symlink' | 'non-regular' | 'package-managed' | 'unavailable';
+
+export interface WirePlumberConfigReport {
+  status: WirePlumberConfigStatus;
+  path: string;
+  detail: string;
+}
+
+export interface LinuxHapticsRepairResult {
+  config: WirePlumberConfigReport;
+  reload: 'ready' | 'reload-required' | 'error';
+  snapshot: BridgeSnapshot;
 }
 
 export interface WindowsDeviceCleanupResult {

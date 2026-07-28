@@ -83,9 +83,11 @@ import {
   listAudioOutputDevices,
   playBridgeHapticsTestPattern,
   playBridgeSpeakerTestTone,
+  getLinuxHapticsEndpointStatus,
   getDefaultRenderEndpointStatus,
   setDefaultRenderBridgeEndpoint,
   type DefaultRenderEndpointStatus,
+  type LinuxHapticsEndpointStatus,
   type SystemAudioHapticsConfig
 } from './audio-helper';
 import { CompanionDebugConfig } from './debug-config';
@@ -108,6 +110,7 @@ const MIC_MUTE_RECONCILE_HOLDOFF_MS = 2000;
 const AUDIO_DEBUG_READ_INTERVAL_MS = 500;
 const TRIGGER_TRACE_READ_INTERVAL_MS = 250;
 const FEEDBACK_TRACE_READ_INTERVAL_MS = 250;
+const LINUX_HAPTICS_ENDPOINT_READ_INTERVAL_MS = 5000;
 const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = CompanionDebugConfig.audioDebugDiagnosticsEnabled;
 const TRIGGER_TRACE_DIAGNOSTICS_ENABLED = CompanionDebugConfig.triggerTraceDiagnosticsEnabled;
 const FEEDBACK_TRACE_DIAGNOSTICS_ENABLED = CompanionDebugConfig.feedbackTraceDiagnosticsEnabled;
@@ -308,7 +311,8 @@ function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
     triggerTraceDroppedCount: 0,
     feedbackTraceLines: [],
     feedbackTraceDroppedCount: 0,
-    audioStatus: null
+    audioStatus: null,
+    linuxHapticsEndpoint: null
   };
 }
 
@@ -1391,6 +1395,8 @@ export class BridgeService extends EventEmitter {
   private feedbackTraceDroppedCount = 0;
   private feedbackTraceSupported: boolean | null = null;
   private audioStatus: AudioStatusPayload | null = null;
+  private linuxHapticsEndpoint: BridgeDiagnostics['linuxHapticsEndpoint'] = null;
+  private lastLinuxHapticsEndpointReadAt = 0;
   private incompatibleCompanionProtocolVersion: ReportProtocolVersion | null = null;
   private lastAudioStatsSignature: string | null = null;
   private systemAudioHapticsRetryAt = 0;
@@ -1668,7 +1674,8 @@ export class BridgeService extends EventEmitter {
       triggerTraceDroppedCount: this.triggerTraceDroppedCount,
       feedbackTraceLines: [...this.feedbackTraceLines],
       feedbackTraceDroppedCount: this.feedbackTraceDroppedCount,
-      audioStatus: this.audioStatus ? { ...this.audioStatus } : null
+      audioStatus: this.audioStatus ? { ...this.audioStatus } : null,
+      linuxHapticsEndpoint: this.linuxHapticsEndpoint ? { ...this.linuxHapticsEndpoint } : null
     };
   }
   private async getDefaultRenderEndpointStatus(): Promise<DefaultRenderEndpointStatus> {
@@ -2802,6 +2809,7 @@ export class BridgeService extends EventEmitter {
     const settings = this.settingsStore.get();
     try {
       await playBridgeHapticsTestPattern(settings.hapticsGainPercent);
+      if (process.platform === 'linux') this.linuxHapticsEndpoint = { status: 'ready' };
     } catch (error) {
       if (this.isBridgeRenderEndpointUnavailableError(error)) {
         return this.skipBridgeHapticsTest('audio endpoint unavailable');
@@ -2809,6 +2817,17 @@ export class BridgeService extends EventEmitter {
       throw error;
     }
     return this.getSnapshot();
+  }
+
+  async refreshLinuxHapticsEndpoint(): Promise<LinuxHapticsEndpointStatus> {
+    const status = await getLinuxHapticsEndpointStatus();
+    this.linuxHapticsEndpoint = status;
+    this.snapshot = {
+      ...this.snapshot,
+      diagnostics: { ...this.snapshot.diagnostics, linuxHapticsEndpoint: status }
+    };
+    this.emitSnapshot();
+    return status;
   }
 
   async testSpeaker(): Promise<BridgeSnapshot> {
@@ -3346,6 +3365,10 @@ export class BridgeService extends EventEmitter {
     if (now < this.pollPausedUntil) {
       return;
     }
+    if (process.platform === 'linux' && now - this.lastLinuxHapticsEndpointReadAt >= LINUX_HAPTICS_ENDPOINT_READ_INTERVAL_MS) {
+      this.lastLinuxHapticsEndpointReadAt = now;
+      this.linuxHapticsEndpoint = await getLinuxHapticsEndpointStatus();
+    }
     const currentSettings = this.settingsStore.get();
 
     const rawDevices = await this.hidDiscovery.listDevices();
@@ -3397,6 +3420,7 @@ export class BridgeService extends EventEmitter {
           firmwareUpdateAvailable: null,
           controllerFirmware: this.controllerFirmware.get(true, rawDevices),
           vdsKernelVersion: readVdsKernelVersion(),
+          linuxHapticsEndpoint: this.linuxHapticsEndpoint,
           lastPollAt: Date.now(),
           rawDevices
         })
@@ -3458,6 +3482,7 @@ export class BridgeService extends EventEmitter {
         lastPollAt: Date.now(),
         controllerFirmware: this.controllerFirmware.get(true, rawDevices),
         vdsKernelVersion: readVdsKernelVersion(),
+        linuxHapticsEndpoint: this.linuxHapticsEndpoint,
         rawDevices
       })
     };

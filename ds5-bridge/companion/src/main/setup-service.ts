@@ -1,5 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
+import { inspectWirePlumberConfig, repairWirePlumberConfig, restartWirePlumberAndWait, type WirePlumberConfigReport } from './wireplumber-config';
 
 export type SetupProgressEvent =
   | { event: 'plan'; total: number; steps: string[]; log: string }
@@ -37,6 +39,36 @@ export class SetupService {
     private readonly installerPath: string,
     private readonly appVersion: string,
   ) {}
+
+  wirePlumberConfigStatus(expected: string, options: { packageManaged?: boolean; managedPaths?: string[] } = {}): WirePlumberConfigReport {
+    const configPath = path.join(this.wirePlumberConfigRoot(), 'wireplumber', 'wireplumber.conf.d', '99-vds-dualsense-wireplumber.conf');
+    return inspectWirePlumberConfig(configPath, expected, options);
+  }
+
+  private wirePlumberConfigRoot(): string {
+    return process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME ?? '', '.config');
+  }
+
+  wirePlumberExpectedContent(): string {
+    const candidates = [
+      process.env.OPENDS5_WIREPLUMBER_CONFIG,
+      path.join(path.dirname(this.installerPath), '..', 'vds', '99-vds-dualsense-wireplumber.conf'),
+      path.join(process.resourcesPath, 'vds-bin', '99-vds-dualsense-wireplumber.conf')
+    ].filter((candidate): candidate is string => Boolean(candidate));
+    for (const candidate of candidates) {
+      try { return fs.readFileSync(candidate, 'utf8'); } catch { /* try next layout */ }
+    }
+    throw new Error('OpenDS5 WirePlumber config is not available in this build.');
+  }
+
+  repairWirePlumberConfig(expected: string, report: WirePlumberConfigReport, approve: boolean): WirePlumberConfigReport {
+    repairWirePlumberConfig(report.path, expected, report, { approve, configRoot: this.wirePlumberConfigRoot() });
+    return inspectWirePlumberConfig(report.path, expected);
+  }
+
+  reloadWirePlumber(endpointReady: () => Promise<boolean>): Promise<'ready' | 'reload-required' | 'error'> {
+    return restartWirePlumberAndWait(endpointReady);
+  }
 
   private env() {
     return { ...process.env, OPENDS5_MODULE_VERSION: this.appVersion };

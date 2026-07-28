@@ -18,6 +18,8 @@ import type {
   BridgeDiagnostics,
   BridgeSnapshot,
   PicoFirmwareActionResult,
+  LinuxHapticsRepairResult,
+  WirePlumberConfigReport,
   UiThemePreset,
   WindowsDeviceCleanupResult
 } from './shared/types';
@@ -53,6 +55,7 @@ const SETUP_CHANNELS = {
 } as const;
 
 const api = {
+  isLinux: process.platform === 'linux',
   getStatus: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:getStatus'),
   getGamingShortcutsSettings: (): Promise<GamingShortcutsSettings> => (
     ipcRenderer.invoke('bridge:getGamingShortcutsSettings')
@@ -199,6 +202,12 @@ const api = {
   ),
   testNotification: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testNotification'),
   testHaptics: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testHaptics'),
+  getLinuxHapticsRepairStatus: (): Promise<WirePlumberConfigReport> => (
+    ipcRenderer.invoke('bridge:getLinuxHapticsRepairStatus')
+  ),
+  repairLinuxHaptics: (approved: boolean): Promise<LinuxHapticsRepairResult> => (
+    ipcRenderer.invoke('bridge:repairLinuxHaptics', approved)
+  ),
   testSpeaker: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testSpeaker'),
   testClassicRumble: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testClassicRumble'),
   testAdaptiveTriggers: (mode?: TriggerTestMode, target?: TriggerTestTarget): Promise<BridgeSnapshot> => (

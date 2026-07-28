@@ -63,6 +63,20 @@ struct VdsdControlPortBinding {
   std::string device_address;
 };
 
+struct VdsdControlAudioStats {
+  unsigned port = 0;
+  std::string path;
+  bool audio_out_stream_active = false;
+  std::uint64_t audio_usb_frame_count = 0;
+  std::uint64_t nonzero_haptics_chunk_count = 0;
+  std::uint64_t bt_0x36_sent_count = 0;
+  std::uint64_t queue_drop_count = 0;
+  std::uint64_t stale_drop_count = 0;
+  std::uint64_t blocked_drop_count = 0;
+  std::uint64_t pending_queue_depth = 0;
+  std::uint64_t max_pending_queue_depth = 0;
+};
+
 enum class VdsdWorkerLaunchStatus {
   Ready,
   VirtualPortProviderUnavailable,
@@ -91,6 +105,8 @@ void print_vdsd_usage(std::ostream &out, std::string_view version,
 bool parse_vdsd_common_option(int argc, char **argv, int &index,
                               VdsdCommonOptions &options);
 std::string trim_command(std::string command);
+std::string format_vdsd_control_audio_stats(
+    std::span<const VdsdControlAudioStats> stats);
 std::uint32_t parse_trace_scope(std::string_view scope);
 std::string trace_scope_name(std::uint32_t scope);
 std::string active_trace_name(std::uint32_t trace_flags);
@@ -126,6 +142,7 @@ std::string handle_vdsd_control_command(
     std::span<const VdsdControlPortStatus> ports,
     const std::function<std::vector<ControllerTarget>()> &list_targets,
     std::uint32_t &trace_flags, bool &reload_requested,
-    CompanionRuntime &companion, Logger &logger);
+    CompanionRuntime &companion, Logger &logger,
+    std::span<const VdsdControlAudioStats> audio_stats = {});
 
 } // namespace vds

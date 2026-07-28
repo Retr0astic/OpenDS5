@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { channelIndices, hapticsPlaybackArgs, HapticsProcessor, nodeChannelLayout, pinnedChannelVolumes } from '../../native/audio-helper-linux.mjs';
+import { BRIDGE_ENDPOINT_ISSUES, channelIndices, hapticsPlaybackArgs, HapticsProcessor, nodeChannelLayout, pinnedChannelVolumes, resolveBridgeEndpoint } from '../../native/audio-helper-linux.mjs';
 
 describe('audio-helper-linux exports', () => {
   it('imports without running main and exposes HapticsProcessor', () => {
@@ -25,6 +26,57 @@ describe('nodeChannelLayout', () => {
   it('falls back to stereo when position length disagrees with channels', () => {
     const node = { info: { params: { Format: [{ channels: 6, position: ['FL', 'FR'] }] } } };
     expect(nodeChannelLayout(node)).toEqual({ channels: 2, position: ['FL', 'FR'] });
+  });
+});
+
+describe('resolveBridgeEndpoint', () => {
+  const card = {
+    id: 7,
+    type: 'PipeWire:Interface:Device',
+    info: { props: { 'opends5.vds': true, 'opends5.haptics.version': '1', 'device.profile': 'pro-audio' } }
+  };
+  const sink = {
+    id: 8,
+    type: 'PipeWire:Interface:Node',
+    info: {
+      props: {
+        'media.class': 'Audio/Sink', 'opends5.vds': true, 'opends5.haptics.version': '1',
+        'device.id': 7, 'audio.channels': 4, 'audio.position': ['FL', 'FR', 'RL', 'RR']
+      },
+      params: { Format: [{ channels: 4, position: ['FL', 'FR', 'RL', 'RR'] }] }
+    }
+  };
+
+  it('requires the tagged card, parent relationship, pro-audio and four-channel map', () => {
+    expect(resolveBridgeEndpoint([card, sink]).endpoint?.sink.id).toBe(8);
+    expect(resolveBridgeEndpoint([sink]).issue).toBe(BRIDGE_ENDPOINT_ISSUES.MISSING_CARD);
+    expect(resolveBridgeEndpoint([card, { ...sink, info: { ...sink.info, props: { ...sink.info.props, 'device.id': 99 } } }]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.PARENT_MISMATCH);
+    expect(resolveBridgeEndpoint([{ ...card, info: { props: { ...card.info.props, 'device.profile': 'analog-stereo' } } }, sink]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.NOT_PRO_AUDIO);
+  });
+
+  it('rejects ambiguity and explicit incompatible channel metadata', () => {
+    expect(resolveBridgeEndpoint([card, sink, { ...sink, id: 9 }]).issue).toBe(BRIDGE_ENDPOINT_ISSUES.AMBIGUOUS);
+    expect(resolveBridgeEndpoint([card, { ...sink, info: { ...sink.info, props: { ...sink.info.props, 'audio.channels': 2 } } }]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_COUNT);
+    expect(resolveBridgeEndpoint([{ ...card, info: { ...card.info, props: { ...card.info.props, 'device.profile': undefined } } }, sink]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.NOT_PRO_AUDIO);
+    expect(resolveBridgeEndpoint([card, { ...sink, info: { ...sink.info, params: {} } }]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_MAP);
+    expect(resolveBridgeEndpoint([card, { ...sink, info: { ...sink.info, params: { Format: [{ channels: 4, position: ['FL', 'FR', 'FR', 'RR'] }] } } }]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_MAP);
+  });
+});
+
+describe('pw-dump lifecycle', () => {
+  it('uses a bounded killable execFile invocation for repeated polling', () => {
+    const source = readFileSync(new URL('../../native/audio-helper-linux.mjs', import.meta.url), 'utf8');
+    expect(source).toContain("timeout: 2000");
+    expect(source).toContain("killSignal: 'SIGKILL'");
+    expect(source).toContain('error.code = \'PW_DUMP_TIMEOUT\'');
+    expect(source).toContain("detail: error?.code === 'PW_DUMP_TIMEOUT' ? 'pw-dump-timeout'");
+    expect(source).toContain('if (stopping || pinInFlight)');
   });
 });
 

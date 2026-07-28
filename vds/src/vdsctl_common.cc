@@ -42,6 +42,8 @@ std::string list_targets_request() {
   return "{\"command\":\"list-targets\"}\n";
 }
 
+std::string audio_stats_request() { return "{\"command\":\"audio-stats\"}\n"; }
+
 std::string trace_request(const VdsctlTraceCommand &trace) {
   std::string request = "{";
   request += jsonl_string_field("command", "trace");
@@ -68,6 +70,7 @@ std::string vdsctl_usage(std::string_view version,
           "  vdsctl detach <address>\n"
           "  vdsctl list\n"
           "  vdsctl list-targets\n"
+          "  vdsctl audio-stats\n"
           "  vdsctl trace on|off [--scope <scope>[,<scope>...]]\n"
           "\n"
           "trace scopes:\n"
@@ -87,6 +90,9 @@ VdsctlCommand parse_vdsctl_command(std::string_view command) {
   }
   if (command == "list-targets") {
     return VdsctlCommand::ListTargets;
+  }
+  if (command == "audio-stats") {
+    return VdsctlCommand::AudioStats;
   }
   if (command == "trace") {
     return VdsctlCommand::Trace;
@@ -120,6 +126,9 @@ int run_vdsctl_app(int argc, char **argv, std::string_view version,
       break;
     case VdsctlCommand::ListTargets:
       std::cout << run_vdsctl_list_targets(argc, platform.request_control);
+      break;
+    case VdsctlCommand::AudioStats:
+      std::cout << run_vdsctl_audio_stats(argc, platform.request_control);
       break;
     case VdsctlCommand::Trace:
       std::cout << run_vdsctl_trace(argc, argv, platform.request_control);
@@ -221,6 +230,13 @@ std::string run_vdsctl_list_targets(
     const std::function<std::string(const std::string &)> &request_control) {
   require_vdsctl_arg_count(argc, 2);
   return request_control(list_targets_request());
+}
+
+std::string run_vdsctl_audio_stats(
+    int argc,
+    const std::function<std::string(const std::string &)> &request_control) {
+  require_vdsctl_arg_count(argc, 2);
+  return request_control(audio_stats_request());
 }
 
 std::string run_vdsctl_trace(

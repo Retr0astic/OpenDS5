@@ -34,6 +34,10 @@ assert_eq 1 "$(grep -c '^bash ' "$tmp/log")" "root helper invoked exactly once (
 env "${base_env[@]}" OPENDS5_SKIP_VERIFY=0 bash "$here/../opends5-install" --yes >/dev/null
 assert_contains "$(cat "$tmp/log")" "modprobe vds_hcd" "runner loads module"
 assert_contains "$(cat "$tmp/log")" "systemctl enable --now vdsd.service" "runner starts vdsd when unit exists"
+assert_contains "$(cat "$tmp/log")" "udevadm trigger --subsystem-match=sound" "runner retriggers sound devices"
+assert_contains "$(cat "$tmp/log")" "wireplumber_install_root ()" "runner includes safe WirePlumber installer"
+assert_contains "$(cat "$tmp/log")" "runuser -u" "root runner drops privileges before user config access"
+assert_contains "$(cat "$tmp/log")" "mktemp -p \"\$target_dir\"" "root runner includes exclusive user temp creation"
 
 # failure rolls back and exits 4
 : > "$tmp/log"

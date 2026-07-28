@@ -184,6 +184,11 @@ target_link_libraries(companion_buffer_length_test
                       PRIVATE vdsd_common vds_protocol vds_log vds_config
                               vds_common jsonl)
 
+add_executable(audio_stats_control_test tests/audio_stats_control_test.cc)
+target_link_libraries(audio_stats_control_test
+                      PRIVATE vdsctl_common vdsd_common vds_protocol vds_log
+                              vds_config vds_common jsonl)
+
 if(WIN32)
   set(VDS_RUNTIME_INSTALL_DIR ".")
   set(VDS_INSTALLED_VDSD "${CMAKE_INSTALL_PREFIX}/vdsd.exe")

@@ -429,6 +429,51 @@ std::string format_control_error_reply(std::string_view error) {
   return reply;
 }
 
+std::string jsonl_uint64_field(std::string_view key, std::uint64_t value) {
+  std::string field = "\"";
+  field += key;
+  field += "\":";
+  field += std::to_string(value);
+  return field;
+}
+
+std::string format_vdsd_control_audio_stats(
+    std::span<const VdsdControlAudioStats> stats) {
+  std::string reply;
+  for (const auto &stat : stats) {
+    std::string line = "{";
+    line += jsonl_uint64_field("schemaVersion", 1);
+    line += ',';
+    line += jsonl_uint64_field("port", stat.port);
+    line += ',';
+    line += jsonl_string_field("path", stat.path);
+    line += ',';
+    line += jsonl_bool_field("audioOutStreamActive",
+                             stat.audio_out_stream_active);
+    line += ',';
+    line += jsonl_uint64_field("usbPcmFrameCount", stat.audio_usb_frame_count);
+    line += ',';
+    line += jsonl_uint64_field("nonZeroHapticsChunkCount",
+                               stat.nonzero_haptics_chunk_count);
+    line += ',';
+    line += jsonl_uint64_field("bt0x36SentCount", stat.bt_0x36_sent_count);
+    line += ',';
+    line += jsonl_uint64_field("queueDropCount", stat.queue_drop_count);
+    line += ',';
+    line += jsonl_uint64_field("staleDropCount", stat.stale_drop_count);
+    line += ',';
+    line += jsonl_uint64_field("blockedDropCount", stat.blocked_drop_count);
+    line += ',';
+    line += jsonl_uint64_field("pendingQueueDepth", stat.pending_queue_depth);
+    line += ',';
+    line += jsonl_uint64_field("maxPendingQueueDepth",
+                               stat.max_pending_queue_depth);
+    line += "}\n";
+    reply += line;
+  }
+  return reply;
+}
+
 std::string format_control_attach_reply(bool ok, std::string_view error,
                                         const ControllerConfig &config) {
   std::string reply = "{";
@@ -675,7 +720,8 @@ std::string handle_vdsd_control_command(
     std::span<const VdsdControlPortStatus> ports,
     const std::function<std::vector<ControllerTarget>()> &list_targets,
     std::uint32_t &trace_flags, bool &reload_requested,
-    CompanionRuntime &companion, Logger &logger) {
+    CompanionRuntime &companion, Logger &logger,
+    std::span<const VdsdControlAudioStats> audio_stats) {
   try {
     constexpr std::string_view context = "control request";
     const std::vector<JsonlField> fields = parse_jsonl_object(request, context);
@@ -694,6 +740,13 @@ std::string handle_vdsd_control_command(
     }
     if (command == "list-targets") {
       return handle_list_targets_control_request(fields, db_path, list_targets);
+    }
+    if (command == "audio-stats") {
+      static constexpr std::string_view expected[] = {
+          "command",
+      };
+      reject_unknown_jsonl_fields(fields, expected, context);
+      return format_vdsd_control_audio_stats(audio_stats);
     }
     if (command == "trace") {
       return handle_trace_control_request(fields, trace_flags, logger);

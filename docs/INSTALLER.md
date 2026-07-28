@@ -43,8 +43,13 @@ locally with `scripts/collect-vds-bin.sh`), the installer also:
 2. installs `vdsd.service` to `/etc/systemd/system/` and the udev rules to
    `/etc/udev/rules.d/`, then reloads udev,
 3. creates the `vds` group and adds the invoking user,
-4. installs the wireplumber config into the user's
-   `~/.config/wireplumber/wireplumber.conf.d/` (owned by the user, not root),
+4. installs the wireplumber config into the invoking user's
+   `$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d/` (or the default
+   `~/.config/...`, owned by the user, not root) only when that managed file is
+   absent. Existing legacy or modified files are preserved and shown as
+   requiring explicit Repair in OpenDS5; active package- or Nix-managed
+   configuration from `$XDG_CONFIG_DIRS`/`$XDG_DATA_DIRS` is never shadowed in
+   the user home,
 5. disables BlueZ's input plugin (`bluetoothd --noplugin=input`, applied via
    the bundled `override-bluetoothd.sh`, skipped if already in effect) — vds
    needs raw ownership of the controller's Bluetooth HID channels, and with
@@ -54,6 +59,10 @@ locally with `scripts/collect-vds-bin.sh`), the installer also:
    anytime with `sudo /usr/share/opends5/override-bluetoothd.sh enable-input
    --restart`,
 6. reloads systemd and enables/starts `vdsd.service`.
+
+The udev reload best-effort retriggers both input and sound devices. If the
+running kernel/udev stack cannot re-enumerate an existing sound node, reconnect
+the controller or restart WirePlumber after installation.
 
 Without a bundle (e.g. a plain repo checkout) these steps are skipped and
 `install-system.sh` builds vdsd from source instead.
@@ -150,6 +159,13 @@ Verify either path with `lsmod | grep vds_hcd` and `ls /dev/vds*` after the
 rebuild (reboot if the kernel changed).
 
 ## Setup wizard
+
+Repair is separate from the userspace binary and DKMS gates. It requires user
+approval, backs up a legacy/modified managed file, replaces only OpenDS5's own
+file atomically, restarts WirePlumber as the logged-in user, and waits up to
+five seconds for the tagged endpoint. A timeout is reported as reload-required
+with the exact manual command `systemctl --user restart wireplumber`; it never
+performs broad `wpctl` profile mutations.
 
 On Linux, the app checks at launch whether `vds_hcd` is loaded and
 `vdsd.service` is active. If not — and setup wasn't skipped before — it opens a

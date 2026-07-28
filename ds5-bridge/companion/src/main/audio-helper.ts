@@ -28,6 +28,13 @@ export type DefaultRenderEndpointStatus = {
   isBridgeEndpoint: boolean;
 };
 
+export type LinuxHapticsEndpointStatus = {
+  status: 'ready' | 'missing-card' | 'missing-sink' | 'parent-mismatch' | 'not-pro-audio'
+    | 'wrong-channel-count' | 'wrong-channel-map' | 'ambiguous' | 'stale';
+  nodeName?: string;
+  detail?: string;
+};
+
 type AudioHelperStartFailureReason =
   | 'device-in-use'
   | 'device-invalidated'
@@ -823,6 +830,25 @@ export async function listAudioOutputDevices(): Promise<AudioOutputDevice[]> {
       } catch {
         resolve([]);
       }
+    });
+  });
+}
+
+export async function getLinuxHapticsEndpointStatus(): Promise<LinuxHapticsEndpointStatus> {
+  if (process.platform !== 'linux') return { status: 'stale' };
+  const launch = helperLaunch(['--endpoint-status']);
+  const helper = spawn(launch.command, launch.args, { env: launch.env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  return new Promise((resolve) => {
+    let stdout = '';
+    const timeout = setTimeout(() => { helper.kill('SIGKILL'); resolve({ status: 'stale' }); }, 2500);
+    helper.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+    helper.on('error', () => { clearTimeout(timeout); resolve({ status: 'stale' }); });
+    helper.on('exit', () => {
+      clearTimeout(timeout);
+      try {
+        const parsed = JSON.parse(stdout) as LinuxHapticsEndpointStatus;
+        resolve(typeof parsed.status === 'string' ? parsed : { status: 'stale' });
+      } catch { resolve({ status: 'stale' }); }
     });
   });
 }

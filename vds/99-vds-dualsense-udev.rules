@@ -1,3 +1,12 @@
 # vDS creates virtual USB controllers below a platform HCD, so systemd-udevd
 # can classify the touchpad as internal. Treat it like the real USB controller.
 ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", KERNELS=="vds_hcd.*", ENV{ID_INPUT_TOUCHPAD}=="1", ENV{ID_INPUT_TOUCHPAD_INTEGRATION}="external", ENV{ID_INTEGRATION}="external"
+
+# Give every vDS sound card/PCM a host-side identity derived from the stable
+# path tag.  The kernel/USB descriptors remain untouched; %k keeps multiple
+# card and PCM ports distinct even when they share one physical path.
+ACTION!="remove", SUBSYSTEM=="sound", KERNELS=="vds_hcd.*", IMPORT{builtin}="path_id"
+ACTION!="remove", SUBSYSTEM=="sound", KERNEL=="card*", KERNELS=="vds_hcd.*", ENV{ID_PATH_TAG}=="?*", ENV{ID_SERIAL}:="OpenDS5_vDS_%E{ID_PATH_TAG}_%k"
+ACTION!="remove", SUBSYSTEM=="sound", KERNEL=="card*", KERNELS=="vds_hcd.*", ENV{ID_PATH_TAG}=="", ENV{ID_SERIAL}:="OpenDS5_vDS_%k"
+ACTION!="remove", SUBSYSTEM=="sound", KERNEL=="pcm*", KERNELS=="vds_hcd.*", ENV{ID_PATH_TAG}=="?*", ENV{ID_SERIAL}:="OpenDS5_vDS_%E{ID_PATH_TAG}_%k"
+ACTION!="remove", SUBSYSTEM=="sound", KERNEL=="pcm*", KERNELS=="vds_hcd.*", ENV{ID_PATH_TAG}=="", ENV{ID_SERIAL}:="OpenDS5_vDS_%k"

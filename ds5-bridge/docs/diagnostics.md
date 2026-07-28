@@ -42,6 +42,17 @@ Firmware defaults and aliases live in `src/debug_config.h`.
 
 ## Companion Runtime
 
+On Linux, the System diagnostics view reports the OpenDS5/vDS audio endpoint
+status. It is ready only when the tagged virtual card has a parent sink in the
+`pro-audio` profile with `FL,FR,RL,RR`; a successful `pw-play` exit is not
+treated as proof that vibration was delivered. Missing, stale, ambiguous, and
+incompatible endpoints are reported with stable issue codes.
+
+For CachyOS Proton `11.0-20260703+`, validation must also confirm that Steam
+Input is disabled for the game and that Proton's controller/audio controls are
+not redirecting the raw four-channel stream. OpenDS5 does not apply a
+game-specific workaround.
+
 Launch the companion with one high-level runtime preset:
 
 ```powershell

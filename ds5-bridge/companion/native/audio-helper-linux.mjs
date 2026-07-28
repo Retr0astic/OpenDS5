@@ -11,7 +11,17 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 const SAMPLE_RATE = 48000;
-const BRIDGE_NODE_PATTERN = /dualsense|vds/i;
+export const BRIDGE_ENDPOINT_ISSUES = Object.freeze({
+  MISSING_CARD: 'missing-card',
+  MISSING_SINK: 'missing-sink',
+  PARENT_MISMATCH: 'parent-mismatch',
+  NOT_PRO_AUDIO: 'not-pro-audio',
+  WRONG_CHANNEL_COUNT: 'wrong-channel-count',
+  WRONG_CHANNEL_MAP: 'wrong-channel-map',
+  AMBIGUOUS: 'ambiguous',
+  STALE: 'stale'
+});
+const REQUIRED_HAPTICS_POSITION = ['FL', 'FR', 'RL', 'RR'];
 
 const BASS_FOCUS_CUTOFF_HZ = { deep: 80, balanced: 160, punchy: 240, wide: 400 }; // matches UI labels
 const RESPONSE_GAIN = { subtle: 0.6, balanced: 1.0, strong: 1.5 };
@@ -28,10 +38,15 @@ function fail(message) {
   process.exit(1);
 }
 
-function pwDump() {
+export function pwDump() {
   return new Promise((resolve, reject) => {
-    execFile('pw-dump', [], { maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
+    execFile('pw-dump', [], {
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: 2000,
+      killSignal: 'SIGKILL'
+    }, (error, stdout) => {
       if (error) {
+        if (error.killed || error.code === 'ETIMEDOUT') error.code = 'PW_DUMP_TIMEOUT';
         reject(error);
         return;
       }
@@ -78,41 +93,68 @@ function isAudioSink(object) {
     && nodeProps(object)['media.class'] === 'Audio/Sink';
 }
 
-function isBridgeSink(object) {
+function isTaggedVdsCard(object) {
   const props = nodeProps(object);
-  if (!isAudioSink(object)) {
-    return false;
+  return object?.type === 'PipeWire:Interface:Device'
+    && (props['opends5.vds'] === true || props['opends5.vds'] === 'true')
+    && props['opends5.haptics.version'] === '1';
+}
+
+function isTaggedBridgeSink(object, cardId) {
+  const props = nodeProps(object);
+  return isAudioSink(object)
+    && (props['opends5.vds'] === true || props['opends5.vds'] === 'true')
+    && props['opends5.haptics.version'] === '1'
+    && String(props['device.id'] ?? '') === String(cardId);
+}
+
+function inspectBridgeEndpoint(objects) {
+  const cards = objects.filter(isTaggedVdsCard);
+  if (cards.length === 0) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.MISSING_CARD };
+  if (cards.length > 1) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.AMBIGUOUS };
+  const card = cards[0];
+  const taggedSinks = objects.filter((object) => isAudioSink(object)
+    && (nodeProps(object)['opends5.vds'] === true || nodeProps(object)['opends5.vds'] === 'true')
+    && nodeProps(object)['opends5.haptics.version'] === '1');
+  const sinks = taggedSinks.filter((object) => isTaggedBridgeSink(object, card.id));
+  if (sinks.length === 0) {
+    return { endpoint: null, issue: taggedSinks.length > 0
+      ? BRIDGE_ENDPOINT_ISSUES.PARENT_MISMATCH : BRIDGE_ENDPOINT_ISSUES.MISSING_SINK };
   }
-  const bridgeName = [
-    props['node.name'],
-    props['node.description'],
-    props['node.nick'],
-    props['device.product.name'],
-    props['device.description'],
-    props['device.nick']
-  ].some((value) => BRIDGE_NODE_PATTERN.test(value ?? ''));
-  const wirelessController = /wireless controller/i.test(
-    `${props['node.description'] ?? ''} ${props['node.nick'] ?? ''} ${props['device.description'] ?? ''} ${props['device.nick'] ?? ''}`
-  );
-  const fourChannel = Number(props['audio.channels']) === 4;
-  return bridgeName || (wirelessController && fourChannel);
+  if (sinks.length > 1) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.AMBIGUOUS };
+  const sink = sinks[0];
+  const profile = nodeProps(card)['device.profile'] ?? nodeProps(card)['device.profile.name'];
+  if (profile !== 'pro-audio') return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.NOT_PRO_AUDIO };
+  const props = nodeProps(sink);
+  if (Number(props['audio.channels']) !== 4) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_COUNT };
+  const format = sink?.info?.params?.Format?.[0];
+  const position = format?.position;
+  if (Number(format?.channels) !== 4
+    || !Array.isArray(position)
+    || position.length !== 4
+    || position.some((value, index) => value !== REQUIRED_HAPTICS_POSITION[index])
+    || !Array.isArray(props['audio.position'])
+    || props['audio.position'].length !== 4
+    || props['audio.position'].some((value, index) => value !== REQUIRED_HAPTICS_POSITION[index])) {
+    return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_MAP };
+  }
+  return { endpoint: { card, sink }, issue: null };
+}
+
+export function resolveBridgeEndpoint(objects) {
+  return inspectBridgeEndpoint(Array.isArray(objects) ? objects : []);
 }
 
 async function findBridgeSink() {
-  const objects = await pwDump();
-  // Prefer the ALSA sink of the virtual controller over loopback filters.
-  const sinks = objects.filter(isBridgeSink);
-  const alsaSink = sinks.find((sink) => (nodeProps(sink)['node.name'] ?? '').startsWith('alsa_output'));
-  return alsaSink ?? sinks[0] ?? null;
+  return resolveBridgeEndpoint(await pwDump()).endpoint?.sink ?? null;
 }
 
 async function requireBridgeSink() {
-  const sink = await findBridgeSink();
-  if (!sink) {
-    fail('status: capture-unavailable DualSense audio sink not found. '
-      + 'Set the controller card profile to pro-audio (wpctl set-profile).');
+  const result = resolveBridgeEndpoint(await pwDump());
+  if (!result.endpoint) {
+    fail(`status: capture-unavailable endpoint-${result.issue}. OpenDS5 vDS audio endpoint is not ready.`);
   }
-  return sink;
+  return result.endpoint.sink;
 }
 
 function biquadLowpass(cutoffHz) {
@@ -270,6 +312,7 @@ async function runRenderLoopbackHaptics(args) {
   // once instead of waiting for the next poll.
   let lastChannelVolumes = null;
   let lastCompError = null;
+  let volumeCompensationInFlight = false;
   const applyCompensation = () => {
     if (lastChannelVolumes) {
       processor.setOutputCompensation(
@@ -278,11 +321,12 @@ async function runRenderLoopbackHaptics(args) {
     }
   };
   const refreshVolumeCompensation = async () => {
+    if (volumeCompensationInFlight) return;
+    volumeCompensationInFlight = true;
     try {
       const objects = await pwDump();
       const found = objects.find((object) => object.id === sink.id)
-        ?? objects.filter(isBridgeSink).find((s) => (nodeProps(s)['node.name'] ?? '').startsWith('alsa_output'))
-        ?? objects.filter(isBridgeSink)[0]
+        ?? resolveBridgeEndpoint(objects).endpoint?.sink
         ?? null;
       const cv = found?.info?.params?.Props?.[0]?.channelVolumes;
       if (Array.isArray(cv) && cv.length >= 3) {
@@ -295,6 +339,8 @@ async function runRenderLoopbackHaptics(args) {
         lastCompError = error.message;
         process.stderr.write(`volume compensation poll failed: ${error.message}\n`);
       }
+    } finally {
+      volumeCompensationInFlight = false;
     }
   };
   refreshVolumeCompensation();
@@ -618,13 +664,7 @@ async function runPlayTestHaptics(args) {
   const gain = Number(argValue(args, '--haptics-gain') ?? 100);
   const wave = buildHapticsTestWave(gain);
   await new Promise((resolve, reject) => {
-    const play = spawn('pw-play', [
-      '--raw',
-      '--target', target,
-      '--format', 'f32', '--rate', `${SAMPLE_RATE}`, '--channels', '4',
-      '--channel-map', 'FL,FR,RL,RR',
-      '-'
-    ], { stdio: ['pipe', 'ignore', 'inherit'] });
+    const play = spawn('pw-play', hapticsPlaybackArgs(target), { stdio: ['pipe', 'ignore', 'inherit'] });
     play.on('error', reject);
     play.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`pw-play exited ${code}`))));
     play.stdin.end(Buffer.from(wave.buffer));
@@ -654,8 +694,9 @@ async function defaultSinkName() {
 async function runListOutputSinks() {
   const objects = await pwDump();
   const current = await defaultSinkName();
+  const bridgeSink = resolveBridgeEndpoint(objects).endpoint?.sink;
   const devices = objects
-    .filter((object) => isAudioSink(object) && !isBridgeSink(object))
+    .filter((object) => isAudioSink(object) && object.id !== bridgeSink?.id)
     .map((object) => {
       const props = nodeProps(object);
       const nodeName = props['node.name'] ?? '';
@@ -669,11 +710,28 @@ async function runListOutputSinks() {
   process.stdout.write(`${JSON.stringify(devices)}\n`);
 }
 
+async function runEndpointStatus() {
+  try {
+    const result = resolveBridgeEndpoint(await pwDump());
+    process.stdout.write(`${JSON.stringify(result.endpoint
+      ? { status: 'ready', nodeName: nodeProps(result.endpoint.sink)['node.name'] }
+      : { status: result.issue })}\n`);
+  } catch (error) {
+    process.stdout.write(`${JSON.stringify({
+      status: 'stale',
+      detail: error?.code === 'PW_DUMP_TIMEOUT' ? 'pw-dump-timeout' : 'pw-dump-unavailable'
+    })}\n`);
+  }
+}
+
 async function runDefaultRenderStatus() {
   const current = await defaultSinkName();
   const deviceName = current?.description || current?.name || '';
-  const isBridgeEndpoint = BRIDGE_NODE_PATTERN.test(current?.name ?? '')
-    || BRIDGE_NODE_PATTERN.test(current?.description ?? '');
+  let isBridgeEndpoint = false;
+  try {
+    const endpoint = resolveBridgeEndpoint(await pwDump()).endpoint;
+    isBridgeEndpoint = Boolean(endpoint && nodeProps(endpoint.sink)['node.name'] === current?.name);
+  } catch { /* report the default endpoint without guessing from its name */ }
   process.stdout.write(`${JSON.stringify({ deviceName, isBridgeEndpoint })}\n`);
 }
 
@@ -908,11 +966,13 @@ async function runVolumeGuard() {
   // helper modes): the parent only starts the guard once the controller
   // audio path is ready, so a missing sink at boot is a real setup error.
   let sink = await requireBridgeSink();
+  let pinInFlight = false;
 
   const pinTick = async () => {
-    if (stopping) {
+    if (stopping || pinInFlight) {
       return;
     }
+    pinInFlight = true;
     try {
       // Re-find the sink each tick so the guard survives the sink coming
       // and going with the controller. channelVolumes change as the user
@@ -941,6 +1001,8 @@ async function runVolumeGuard() {
       });
     } catch (error) {
       process.stderr.write(`volume guard tick failed: ${error.message}\n`);
+    } finally {
+      pinInFlight = false;
     }
   };
 
@@ -979,6 +1041,8 @@ async function main() {
     await runPlayTestHaptics(args);
   } else if (args.includes('--list-output-sinks')) {
     await runListOutputSinks();
+  } else if (args.includes('--endpoint-status')) {
+    await runEndpointStatus();
   } else if (args.includes('--default-render-status')) {
     await runDefaultRenderStatus();
   } else if (args.includes('--set-default-render-bridge')) {

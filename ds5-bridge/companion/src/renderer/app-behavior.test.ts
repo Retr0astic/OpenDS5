@@ -123,6 +123,19 @@ describe('renderer behavior guards', () => {
     expect(buttonSource).toContain('snapshot.status?.testHapticsCooldown');
   });
 
+  it('shows a user-approved WirePlumber Repair action without claiming vibration', () => {
+    expect(appSource).toContain('window.bridge.getLinuxHapticsRepairStatus()');
+    expect(appSource).toContain('window.confirm');
+    expect(appSource).toContain("window.bridge.repairLinuxHaptics(true)");
+    expect(appSource).toContain('reload-required');
+    expect(appSource).toContain('Physical vibration is not claimed');
+    expect(appSource).toContain("['current', 'package-managed', 'symlink', 'non-regular', 'unavailable']");
+    expect(appSource).toContain("'symlink', 'non-regular', 'unavailable'");
+    expect(appSource).toContain('Protected path; replace the symlink or non-regular entry manually');
+    expect(appSource).toContain('window.bridge.isLinux');
+    expect(appSource).toContain('systemctl --user restart wireplumber');
+  });
+
   it('does not show generic command-pending copy in renderer status badges', () => {
     expect(appSource).not.toContain('Command Pending');
   });

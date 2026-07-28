@@ -137,6 +137,9 @@ struct TraceState {
   std::uint64_t coalesced_bt_state_count = 0;
   std::uint64_t blocked_bt_state_count = 0;
   std::uint64_t audio_usb_frame_count = 0;
+  std::uint64_t nonzero_haptics_chunk_count = 0;
+  std::uint64_t bt_0x36_sent_count = 0;
+  std::uint64_t max_pending_queue_depth = 0;
   std::uint64_t bt_input_count = 0;
   std::uint64_t bt_mic_packet_count = 0;
   std::uint64_t bt_mic_drop_count = 0;
@@ -731,14 +734,19 @@ void handle_frame(const vds_frame_header &header,
   }
 
   const bool output_trace = trace_enabled(trace_flags, kTraceOutput);
+  const bool valid_usb_audio_frame =
+      header.type == VDS_FRAME_USB_AUDIO_OUT &&
+      payload.size() >= VDS_AUDIO_CHANNELS * sizeof(std::int16_t);
+  if (valid_usb_audio_frame) {
+    ++port.trace_state.audio_usb_frame_count;
+  }
   if (output_trace) {
     std::ostringstream line;
     line << port.path << " frame " << vds::frame_type_name(header.type)
          << " len=" << header.length << " seq=" << header.sequence;
 
     bool emit_trace = true;
-    if (header.type == VDS_FRAME_USB_AUDIO_OUT &&
-        payload.size() >= VDS_AUDIO_CHANNELS * sizeof(std::int16_t)) {
+    if (valid_usb_audio_frame) {
       std::array<int, VDS_AUDIO_CHANNELS> peaks{};
       const std::size_t frame_size = VDS_AUDIO_CHANNELS * sizeof(std::int16_t);
       const std::size_t frames = payload.size() / frame_size;
@@ -756,7 +764,6 @@ void handle_frame(const vds_frame_header &header,
         }
       }
 
-      ++port.trace_state.audio_usb_frame_count;
       const bool haptics_nonzero = peaks[2] != 0 || peaks[3] != 0;
       emit_trace =
           port.trace_state.audio_usb_frame_count == 1 ||
@@ -777,6 +784,7 @@ void handle_frame(const vds_frame_header &header,
     if (output_trace) {
       trace_hid_out_report(port.path, payload, port.trace_state, logger);
     }
+
     if (!port.output_state.apply_usb_output_report(payload)) {
       if (output_trace) {
         logger.log(vds::LogScope::Hid, vds::LogLevel::Debug,
@@ -956,6 +964,9 @@ void handle_frame(const vds_frame_header &header,
   const auto chunks = port.extractor.push_usb_audio(payload);
   const auto extract_duration = Clock::now() - extract_start;
   for (const auto &chunk : chunks) {
+    if (chunk.has_haptics_signal) {
+      ++port.trace_state.nonzero_haptics_chunk_count;
+    }
     if (output_trace) {
       if (chunk.has_haptics_signal) {
         if (!port.trace_state.haptics_burst_active) {
@@ -988,6 +999,9 @@ void handle_frame(const vds_frame_header &header,
     }
 
     port.pending_audio_chunks.push_back(chunk);
+    port.trace_state.max_pending_queue_depth = std::max<std::uint64_t>(
+        port.trace_state.max_pending_queue_depth,
+        static_cast<std::uint64_t>(port.pending_audio_chunks.size()));
     ++queued_chunks;
   }
   if (dropped_chunks > 0 &&
@@ -1837,6 +1851,8 @@ bool flush_pending_audio_chunk(VirtualPort &port,
     return false;
   }
 
+  ++port.trace_state.bt_0x36_sent_count;
+
   const auto send_duration = Clock::now() - send_start;
   port.pending_audio_chunks.pop_front();
   port.last_sent_bt_state = port.output_state.state();
@@ -1887,7 +1903,13 @@ void enqueue_speaker_waveout_chunk(VirtualPort &port, std::uint32_t trace_flags,
     if (port.pending_audio_chunks.size() >= port.max_pending_audio_chunks) {
       break;
     }
+    if (chunk.has_haptics_signal) {
+      ++port.trace_state.nonzero_haptics_chunk_count;
+    }
     port.pending_audio_chunks.push_back(chunk);
+    port.trace_state.max_pending_queue_depth = std::max<std::uint64_t>(
+        port.trace_state.max_pending_queue_depth,
+        static_cast<std::uint64_t>(port.pending_audio_chunks.size()));
   }
   if (trace_enabled(trace_flags, kTraceOutput) && !chunks.empty()) {
     logger.log(vds::LogScope::Output, vds::LogLevel::Debug,
@@ -2206,10 +2228,35 @@ void handle_control_client(int control_fd, std::span<VirtualPort> ports,
   const std::vector<vds::VdsdControlPortStatus> port_statuses =
       vds::build_vdsd_control_port_statuses(port_candidates, port_bindings);
 
+  std::vector<vds::VdsdControlAudioStats> audio_stats;
+  audio_stats.reserve(ports.size());
+  for (const auto &port : ports) {
+    const auto port_index = vds::port_index_from_path(port.path);
+    if (!port_index) {
+      continue;
+    }
+    audio_stats.push_back(vds::VdsdControlAudioStats{
+        .port = *port_index,
+        .path = port.path,
+        .audio_out_stream_active = port.audio_out_stream_active,
+        .audio_usb_frame_count = port.trace_state.audio_usb_frame_count,
+        .nonzero_haptics_chunk_count =
+            port.trace_state.nonzero_haptics_chunk_count,
+        .bt_0x36_sent_count = port.trace_state.bt_0x36_sent_count,
+        .queue_drop_count =
+            port.trace_state.queue_dropped_audio_haptics_count,
+        .stale_drop_count = port.trace_state.stale_audio_haptics_count,
+        .blocked_drop_count = port.trace_state.blocked_audio_haptics_count,
+        .pending_queue_depth =
+            static_cast<std::uint64_t>(port.pending_audio_chunks.size()),
+        .max_pending_queue_depth = port.trace_state.max_pending_queue_depth,
+    });
+  }
+
   reply = vds::handle_vdsd_control_command(
       command, db_path, controller_statuses, port_statuses,
       [] { return vds::list_bluez_controller_targets(); }, trace_flags,
-      reload_requested, companion, logger);
+      reload_requested, companion, logger, audio_stats);
 
   try {
     vds::write_full(client_fd.get(), reply);

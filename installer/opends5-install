@@ -250,23 +250,96 @@ detect_kernel_satisfied() {
   if [ -d "${SYSROOT}/sys/module/vds_hcd" ]; then echo 1; else echo 0; fi
 }
 
+wireplumber_install_user() {
+  local config_home="$1" config_dirs="$2" data_dirs="$3" source="$4"
+  local config_root target_dir target path dir active temp old_ifs
+  case "$config_home" in /*) ;; *) echo 'refusing non-absolute XDG_CONFIG_HOME'; return 1 ;; esac
+  config_root="$config_home"
+  target_dir="$config_root/wireplumber/wireplumber.conf.d"
+  target="$target_dir/99-vds-dualsense-wireplumber.conf"
+
+  validate_existing_path() {
+    path="$1"
+    while [ "$path" != / ]; do
+      if [ -L "$path" ]; then echo "refusing symlink in WirePlumber path: $path"; return 1; fi
+      if [ -e "$path" ] && [ ! -d "$path" ]; then echo "refusing non-directory in WirePlumber path: $path"; return 1; fi
+      path="$(dirname "$path")"
+    done
+  }
+  validate_existing_path "$target_dir"
+  if [ -L "$target" ]; then echo 'refusing symlink WirePlumber target'; return 1; fi
+  if [ -e "$target" ] && [ ! -f "$target" ]; then echo 'refusing non-regular WirePlumber target'; return 1; fi
+
+  active=0
+  [ -f /etc/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf ] && active=1
+  old_ifs="$IFS"
+  while IFS= read -r dir; do
+    [ -n "$dir" ] && [ -f "$dir/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf" ] && active=1
+  done < <(printf '%s\n' "$config_dirs" | tr ':' '\n')
+  while IFS= read -r dir; do
+    [ -n "$dir" ] && [ -f "$dir/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf" ] && active=1
+  done < <(printf '%s\n' "$data_dirs" | tr ':' '\n')
+  IFS="$old_ifs"
+
+  if [ -f "$target" ]; then
+    echo 'preserving existing user WirePlumber config; use OpenDS5 Repair after review'
+    return 0
+  fi
+  if [ "$active" -eq 1 ]; then
+    echo 'preserving active package/system WirePlumber config; no user shadow override'
+    return 0
+  fi
+
+  for dir in "$config_root" "$config_root/wireplumber" "$target_dir"; do
+    if [ -L "$dir" ]; then echo "refusing symlink in WirePlumber path: $dir"; return 1; fi
+    if [ -e "$dir" ] && [ ! -d "$dir" ]; then echo "refusing non-directory in WirePlumber path: $dir"; return 1; fi
+    if [ ! -e "$dir" ]; then mkdir -m 0700 "$dir" || return 1; fi
+  done
+  temp="$(mktemp -p "$target_dir" '.99-vds-dualsense-wireplumber.conf.tmp.XXXXXX')" || return 1
+  if ! cp -- "$source" "$temp" || ! chmod 0644 "$temp" || ! mv -f -- "$temp" "$target"; then
+    rm -f -- "$temp"
+    return 1
+  fi
+}
+
+wireplumber_install_root() {
+  local user="$1" home="$2" config_home="$3" config_dirs="$4" data_dirs="$5" source="$6"
+  local command
+  command="$(declare -f wireplumber_install_user); wireplumber_install_user \"\$1\" \"\$2\" \"\$3\" \"\$4\""
+  runuser -u "$user" -- /bin/bash -c "$command" _ \
+    "$config_home" "$config_dirs" "$data_dirs" "$source"
+}
+
 plan_userspace() {
   [ -n "$USERSPACE_SRC" ] || return 0
-  local user home
+  local user home config_home config_dirs data_dirs
+  local user_q home_q config_home_q config_dirs_q data_dirs_q source_q
   user="$(id -un)"
   home="$HOME"
+  config_home="$(printenv XDG_CONFIG_HOME 2>/dev/null || true)"
+  [ -n "$config_home" ] || config_home="$home/.config"
+  config_dirs="$(printenv XDG_CONFIG_DIRS 2>/dev/null || true)"
+  [ -n "$config_dirs" ] || config_dirs="/etc/xdg"
+  data_dirs="$(printenv XDG_DATA_DIRS 2>/dev/null || true)"
+  [ -n "$data_dirs" ] || data_dirs="/usr/local/share:/usr/share"
+  printf -v user_q '%q' "$user"
+  printf -v home_q '%q' "$home"
+  printf -v config_home_q '%q' "$config_home"
+  printf -v config_dirs_q '%q' "$config_dirs"
+  printf -v data_dirs_q '%q' "$data_dirs"
+  printf -v source_q '%q' "$USERSPACE_SRC/99-vds-dualsense-wireplumber.conf"
   plan_add "Install vdsd and vdsctl to /usr/local/bin" \
     "install -m 0755 '${USERSPACE_SRC}/vdsd' '${USERSPACE_SRC}/vdsctl' /usr/local/bin/"
   plan_add "Install systemd unit and udev rules" \
     "sed 's|@VDS_SYSTEMD_VDSD@|/usr/local/bin/vdsd|' '${USERSPACE_SRC}/vdsd.service.in' > /etc/systemd/system/vdsd.service && \
      install -m 0644 '${USERSPACE_SRC}/99-vds-dualsense-udev.rules' /etc/udev/rules.d/ && \
-     udevadm control --reload-rules && { udevadm trigger --subsystem-match=input || true; }"
+     udevadm control --reload-rules && \
+     { udevadm trigger --subsystem-match=input || true; } && \
+     { udevadm trigger --subsystem-match=sound || true; }"
   plan_add "Create vds group and add ${user}" \
     "groupadd -f vds && usermod -aG vds '${user}'"
   plan_add "Install wireplumber config for ${user}" \
-    "mkdir -p '${home}/.config/wireplumber/wireplumber.conf.d' && \
-     install -m 0644 '${USERSPACE_SRC}/99-vds-dualsense-wireplumber.conf' '${home}/.config/wireplumber/wireplumber.conf.d/' && \
-     chown -R '${user}:' '${home}/.config/wireplumber'"
+    "wireplumber_install_root ${user_q} ${home_q} ${config_home_q} ${config_dirs_q} ${data_dirs_q} ${source_q}"
   # vds needs raw ownership of the controller's HID L2CAP channels; BlueZ's
   # input plugin claims them first and the app never sees the controller.
   # Trade-off (upstream vds limitation): other BT input devices stop working.
@@ -418,6 +491,8 @@ build_runner() { # path
     printf '  dkms remove vds_hcd/%s --all >/dev/null 2>&1 || true\n' "$MODULE_VER"
     printf '  exit 4\n}\n'
     printf 'fail_quiet() { log "FAILED: $1"; dkms remove vds_hcd/%s --all >/dev/null 2>&1 || true; exit 4; }\n' "$MODULE_VER"
+    printf '%s\n' "$(declare -f wireplumber_install_user)"
+    printf '%s\n' "$(declare -f wireplumber_install_root)"
     printf 'log "=== opends5-install run $(date -Is) ==="\n'
     printf 'log %q\n' "version=$MODULE_VER platform=$(detect_platform) kernel=$KERNEL_RELEASE flavor=$(detect_kernel_flavor) sb=$(detect_secureboot) lockdown=$(detect_lockdown)"
     local i

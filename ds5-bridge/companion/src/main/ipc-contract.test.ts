@@ -114,6 +114,18 @@ describe('IPC contract', () => {
     expect(bridgeServiceSource).toContain('hapticsVolumeSync: enabled');
   });
 
+  it('exposes explicit Linux haptics repair IPC with a snapshot result', () => {
+    expect(preloadSource).toContain("ipcRenderer.invoke('bridge:getLinuxHapticsRepairStatus')");
+    expect(preloadSource).toContain("ipcRenderer.invoke('bridge:repairLinuxHaptics', approved)");
+    expect(mainSource).toContain("ipcMain.handle('bridge:getLinuxHapticsRepairStatus'");
+    expect(mainSource).toContain("ipcMain.handle('bridge:repairLinuxHaptics'");
+    expect(mainSource).toContain("if (approved !== true) throw new Error('WirePlumber repair requires explicit approval.')");
+    expect(mainSource).toContain('return { config, reload, snapshot: service.getSnapshot() }');
+    expect(mainSource).toContain("if (process.platform !== 'linux') return { status: 'unavailable'");
+    expect(mainSource).toContain("if (process.platform !== 'linux') throw new Error('WirePlumber repair is available on Linux only.')");
+    expect(preloadSource).toContain("isLinux: process.platform === 'linux'");
+  });
+
   it('exposes trigger profile engine channels', () => {
     expect(preloadSource).toContain("ipcRenderer.invoke('bridge:listTriggerProfiles')");
     expect(preloadSource).toContain("ipcRenderer.invoke('bridge:saveTriggerProfile', profile)");

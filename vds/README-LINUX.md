@@ -213,9 +213,12 @@ wpctl set-profile <device-id> <pro-audio-profile-index>
 ```
 
 After setting the `pro-audio` profile, install the included WirePlumber rule. It
-gives the virtual controller stable display names, sets the output node to 4
-channels, disables channelmix normalization, and gives the microphone source a
-low priority:
+matches the existing DualSense ALSA card and output node identities, tags the
+card and haptics sink, gives the virtual controller stable display names, keeps
+the output at four channels with `FL,FR,RL,RR`, disables channelmix
+normalization, and gives the microphone source a low priority. If a package or
+Nix installation already provides the rule system-wide, do not create a user
+override:
 
 ```sh
 mkdir -p ~/.config/wireplumber/wireplumber.conf.d
@@ -225,7 +228,7 @@ cp 99-vds-dualsense-wireplumber.conf ~/.config/wireplumber/wireplumber.conf.d/
 Restart the user audio services after changing this file:
 
 ```sh
-systemctl --user restart pipewire pipewire-pulse wireplumber
+systemctl --user restart wireplumber
 ```
 
 ## Input Setup
