@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.12)
 
 project(vds LANGUAGES CXX)
 
+include(CTest)
+
 option(INSTALL_SERVICE "Register vdsd as a system service during install" OFF)
 option(STOP_SERVICE "Stop vdsd before service install or uninstall" ON)
 mark_as_advanced(STOP_SERVICE)
@@ -176,18 +178,38 @@ else()
             vds_udev)
 endif()
 
-add_executable(trigger_effect_v2_test tests/trigger_effect_v2_test.cc)
-target_link_libraries(trigger_effect_v2_test PRIVATE vds_protocol)
+if(BUILD_TESTING)
+  add_executable(trigger_effect_v2_test tests/trigger_effect_v2_test.cc)
+  target_link_libraries(trigger_effect_v2_test PRIVATE vds_protocol)
+  add_test(NAME trigger_effect_v2_test
+           COMMAND $<TARGET_FILE:trigger_effect_v2_test>)
 
-add_executable(companion_buffer_length_test tests/companion_buffer_length_test.cc)
-target_link_libraries(companion_buffer_length_test
-                      PRIVATE vdsd_common vds_protocol vds_log vds_config
-                              vds_common jsonl)
+  add_executable(output_state_haptics_test tests/output_state_haptics_test.cc)
+  target_link_libraries(output_state_haptics_test PRIVATE vds_protocol)
+  add_test(NAME output_state_haptics_test
+           COMMAND $<TARGET_FILE:output_state_haptics_test>)
 
-add_executable(audio_stats_control_test tests/audio_stats_control_test.cc)
-target_link_libraries(audio_stats_control_test
-                      PRIVATE vdsctl_common vdsd_common vds_protocol vds_log
-                              vds_config vds_common jsonl)
+  if(NOT WIN32)
+    add_executable(haptic_lease_test tests/haptic_lease_test.cc)
+    target_link_libraries(haptic_lease_test PRIVATE vds_protocol)
+    add_test(NAME haptic_lease_test COMMAND $<TARGET_FILE:haptic_lease_test>)
+  endif()
+
+  add_executable(companion_buffer_length_test
+                 tests/companion_buffer_length_test.cc)
+  target_link_libraries(companion_buffer_length_test
+                        PRIVATE vdsd_common vds_protocol vds_log vds_config
+                                vds_common jsonl)
+  add_test(NAME companion_buffer_length_test
+           COMMAND $<TARGET_FILE:companion_buffer_length_test>)
+
+  add_executable(audio_stats_control_test tests/audio_stats_control_test.cc)
+  target_link_libraries(audio_stats_control_test
+                        PRIVATE vdsctl_common vdsd_common vds_protocol vds_log
+                                vds_config vds_common jsonl)
+  add_test(NAME audio_stats_control_test
+           COMMAND $<TARGET_FILE:audio_stats_control_test>)
+endif()
 
 if(WIN32)
   set(VDS_RUNTIME_INSTALL_DIR ".")

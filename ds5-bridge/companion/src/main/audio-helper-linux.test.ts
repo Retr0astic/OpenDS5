@@ -62,10 +62,98 @@ describe('resolveBridgeEndpoint', () => {
       .toBe(BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_COUNT);
     expect(resolveBridgeEndpoint([{ ...card, info: { ...card.info, props: { ...card.info.props, 'device.profile': undefined } } }, sink]).issue)
       .toBe(BRIDGE_ENDPOINT_ISSUES.NOT_PRO_AUDIO);
-    expect(resolveBridgeEndpoint([card, { ...sink, info: { ...sink.info, params: {} } }]).issue)
-      .toBe(BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_MAP);
+    expect(resolveBridgeEndpoint([card, { ...sink, info: { ...sink.info, params: {} } }]).endpoint?.sink.id)
+      .toBe(8);
     expect(resolveBridgeEndpoint([card, { ...sink, info: { ...sink.info, params: { Format: [{ channels: 4, position: ['FL', 'FR', 'FR', 'RR'] }] } } }]).issue)
       .toBe(BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_MAP);
+  });
+
+  it('accepts a stable untagged legacy vDS ALSA endpoint with optional metadata absent', () => {
+    const legacyCard = { id: 17, type: 'PipeWire:Interface:Device', info: { props: {
+      'device.name': 'alsa_card.usb-OpenDS5_vDS_ABC123', 'device.profile': 'pro-audio'
+    } } };
+    const legacySink = { id: 18, type: 'PipeWire:Interface:Node', info: { props: {
+      'media.class': 'Audio/Sink', 'node.name': 'alsa_output.usb-OpenDS5_vDS_ABC123',
+      'device.id': 17, 'audio.channels': 4
+    }, params: {} } };
+    expect(resolveBridgeEndpoint([legacyCard, legacySink]).endpoint?.sink.id).toBe(18);
+  });
+
+  it('rejects ambiguous legacy endpoints and explicit wrong maps', () => {
+    const card = { id: 17, type: 'PipeWire:Interface:Device', info: { props: {
+      'device.name': 'alsa_card.usb-OpenDS5_vDS_ABC123', 'device.profile': 'pro-audio'
+    } } };
+    const sink = (id, position = ['FL', 'FR', 'RL', 'RR']) => ({ id, type: 'PipeWire:Interface:Node', info: { props: {
+      'media.class': 'Audio/Sink', 'node.name': 'alsa_output.usb-OpenDS5_vDS_ABC123', 'device.id': 17,
+      'audio.channels': 4, 'audio.position': position
+    }, params: { Format: [{ channels: 4, position }] } } });
+    expect(resolveBridgeEndpoint([card, sink(18), sink(19)]).issue).toBe(BRIDGE_ENDPOINT_ISSUES.AMBIGUOUS);
+    expect(resolveBridgeEndpoint([card, sink(18, ['FL', 'FR', 'FC', 'RR'])]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_MAP);
+    const wrongParent = sink(18);
+    wrongParent.info.props['device.id'] = 99;
+    expect(resolveBridgeEndpoint([card, wrongParent]).issue).toBe(BRIDGE_ENDPOINT_ISSUES.PARENT_MISMATCH);
+  });
+
+  it('accepts the recorded untagged Sony DualSense pro-audio endpoint', () => {
+    const sonyCard = { id: 90, type: 'PipeWire:Interface:Device', info: { props: {
+      'device.name': 'alsa_card.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller-00',
+      'device.profile': 'pro-audio', 'device.bus-path': 'platform/vds_hcd.0'
+    } } };
+    const sonySink = { id: 84, type: 'PipeWire:Interface:Node', info: { props: {
+      'node.name': 'alsa_output.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller-00.pro-output-0',
+      'media.class': 'Audio/Sink', 'device.id': 90, 'audio.channels': 4,
+      'audio.position': '[ "FL", "FR", "RL", "RR" ]'
+    }, params: { Format: [{ channels: 4, position: ['FL', 'FR', 'RL', 'RR'] }] } } };
+    expect(resolveBridgeEndpoint([sonyCard, sonySink]).endpoint?.sink.id).toBe(84);
+  });
+
+  it('does not fall back to Sony when a tagged vDS card has no tagged sink', () => {
+    const sonyCard = { id: 90, type: 'PipeWire:Interface:Device', info: { props: {
+      'device.name': 'alsa_card.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller-00',
+      'device.profile': 'pro-audio', 'device.sysfs.path': '/devices/platform/vds_hcd.0/usb1/1-1'
+    } } };
+    const sonySink = { id: 84, type: 'PipeWire:Interface:Node', info: { props: {
+      'node.name': 'alsa_output.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller-00.pro-output-0',
+      'media.class': 'Audio/Sink', 'device.id': 90, 'audio.channels': 4,
+      'audio.position': ['FL', 'FR', 'RL', 'RR']
+    }, params: { Format: [{ channels: 4, position: ['FL', 'FR', 'RL', 'RR'] }] } } };
+    expect(resolveBridgeEndpoint([card, sonyCard, sonySink]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.MISSING_SINK);
+  });
+
+  it('keeps the Sony compatibility path strict about parentage and channel map', () => {
+    const sonyCard = { id: 90, type: 'PipeWire:Interface:Device', info: { props: {
+      'device.name': 'alsa_card.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller-00',
+      'device.profile': 'pro-audio', 'device.bus-path': 'platform/vds_hcd.0'
+    } } };
+    const sonySink = (overrides = {}) => ({ id: 84, type: 'PipeWire:Interface:Node', info: { props: {
+      'node.name': 'alsa_output.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller-00.pro-output-0',
+      'media.class': 'Audio/Sink', 'device.id': 90, 'audio.channels': 4,
+      'audio.position': ['FL', 'FR', 'RL', 'RR'], ...overrides
+    }, params: { Format: [{ channels: 4, position: ['FL', 'FR', 'RL', 'RR'] }] } } });
+    expect(resolveBridgeEndpoint([sonyCard, sonySink({ 'device.id': 91 })]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.PARENT_MISMATCH);
+    expect(resolveBridgeEndpoint([sonyCard, sonySink({ 'audio.position': ['FL', 'FR', 'FC', 'RR'] })]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_MAP);
+    expect(resolveBridgeEndpoint([sonyCard, sonySink({ 'audio.position': '[ "FL", "FR", "FC", "RR" ]' })]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_MAP);
+    expect(resolveBridgeEndpoint([sonyCard, sonySink({ 'audio.channels': 2 })]).issue)
+      .toBe(BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_COUNT);
+  });
+
+  it('rejects an identically named physical USB DualSense Sony fallback', () => {
+    const physicalCard = { id: 90, type: 'PipeWire:Interface:Device', info: { props: {
+      'device.name': 'alsa_card.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller-00',
+      'device.profile': 'pro-audio', 'device.bus-path': 'pci-0000:00:14.0-usb-0:1:1.0',
+      'device.sysfs.path': '/devices/pci0000:00/0000:00:14.0/usb1/1-1'
+    } } };
+    const sink = { id: 84, type: 'PipeWire:Interface:Node', info: { props: {
+      'node.name': 'alsa_output.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller-00.pro-output-0',
+      'media.class': 'Audio/Sink', 'device.id': 90, 'audio.channels': 4,
+      'audio.position': '[ "FL", "FR", "RL", "RR" ]'
+    }, params: {} } };
+    expect(resolveBridgeEndpoint([physicalCard, sink]).issue).toBe(BRIDGE_ENDPOINT_ISSUES.MISSING_CARD);
   });
 });
 
@@ -173,7 +261,6 @@ import {
   appCaptureRecordArgs,
   busFrames,
   channelCompensation,
-  channelIndices,
   hasSignal,
   matchAppStreamNode,
   matchAppStreamNodes,

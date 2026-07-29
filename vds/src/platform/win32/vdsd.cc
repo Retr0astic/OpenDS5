@@ -308,6 +308,9 @@ audio_output_interval_for_pending(std::size_t pending_chunks,
 
 struct BridgeState {
   std::mutex mutex;
+  // Serializes the complete 0x31 snapshot -> transport -> commit lifecycle.
+  // Callers must not hold mutex while acquiring this mutex.
+  std::mutex bt_state_send_mutex;
   vds::DsOutputState output_state;
   vds::PcmAudioExtractor extractor{kWindowsSpeakerInputFrames};
   vds::PcmAudioExtractor waveout_extractor{kWindowsSpeakerInputFrames};
@@ -326,6 +329,8 @@ struct BridgeState {
   Clock::time_point audio_last_flush_time{};
   Clock::time_point audio_last_summary_time{};
   vds::DsState last_sent_state{};
+  std::optional<vds::DsState> pending_bt_state;
+  std::optional<vds::BtStateReport> pending_bt_state_report;
   vds::UsbInputReport last_logged_input_report{};
   std::uint64_t usb_input_forward_count = 0;
   std::uint64_t usb_input_change_log_count = 0;
@@ -802,26 +807,62 @@ bool try_send_bt_output_report(BluetoothTransport &bluetooth,
   return sent;
 }
 
-std::optional<vds::BtStateReport>
+struct PendingBtStateReport {
+  vds::DsState state;
+  vds::BtStateReport report;
+};
+
+std::optional<PendingBtStateReport>
 build_bt_state_if_changed(BridgeState &state) {
   std::lock_guard guard(state.mutex);
   const vds::DsState current = state.output_state.state();
   if (state.have_last_sent_state && state.last_sent_state == current) {
+    state.pending_bt_state.reset();
+    state.pending_bt_state_report.reset();
     return std::nullopt;
   }
-  const auto report = state.output_state.build_bt_state_report();
-  state.last_sent_state = current;
-  state.have_last_sent_state = true;
-  return report;
+  if (!state.pending_bt_state || *state.pending_bt_state != current) {
+    state.pending_bt_state = current;
+    state.pending_bt_state_report = state.output_state.build_bt_state_report();
+  }
+  return PendingBtStateReport{.state = *state.pending_bt_state,
+                              .report = *state.pending_bt_state_report};
 }
 
 void send_bt_state_if_changed(BluetoothTransport &bluetooth, BridgeState &state,
                               vds::Logger &logger,
                               std::mutex &bluetooth_mutex) {
-  const auto report = build_bt_state_if_changed(state);
-  if (report) {
-    (void)try_send_bt_output_report(bluetooth, *report, logger, bluetooth_mutex,
-                                    "state");
+  std::lock_guard send_guard(state.bt_state_send_mutex);
+  const auto pending = build_bt_state_if_changed(state);
+  if (!pending) {
+    return;
+  }
+  if (!try_send_bt_output_report(bluetooth, pending->report, logger,
+                                 bluetooth_mutex, "state")) {
+    return;
+  }
+
+  std::lock_guard guard(state.mutex);
+  if (state.pending_bt_state && *state.pending_bt_state == pending->state) {
+    state.last_sent_state = pending->state;
+    state.have_last_sent_state = true;
+    state.pending_bt_state.reset();
+    state.pending_bt_state_report.reset();
+  } else if (state.pending_bt_state) {
+    // A newer state was queued while this report was in flight. Record what
+    // reached the controller without discarding the newer retry.
+    state.last_sent_state = pending->state;
+    state.have_last_sent_state = true;
+  }
+
+  // Audio output can change effective_state_ while this state report is in
+  // flight. Record what physically reached the controller, then queue the
+  // current state so a stale successful send can never become terminal.
+  const vds::DsState current = state.output_state.state();
+  if (current != pending->state &&
+      (!state.pending_bt_state || *state.pending_bt_state != current)) {
+    state.pending_bt_state = current;
+    state.pending_bt_state_report = state.output_state.build_bt_state_report();
   }
 }
 
@@ -1389,13 +1430,15 @@ void send_initial_bluetooth_reports(BluetoothTransport &bluetooth,
                                     std::mutex &bluetooth_mutex) {
   logger.log("bt", vds::LogLevel::Info,
              "sending Windows startup Bluetooth output init report");
-  try_send_bt_output_report(bluetooth,
-                            state.output_state.build_bt_init_report(), logger,
-                            bluetooth_mutex, "init");
+  const bool sent = try_send_bt_output_report(
+      bluetooth, state.output_state.build_bt_init_report(), logger,
+      bluetooth_mutex, "init");
   {
     std::lock_guard guard(state.mutex);
-    state.last_sent_state = state.output_state.state();
-    state.have_last_sent_state = true;
+    if (sent) {
+      state.last_sent_state = state.output_state.state();
+      state.have_last_sent_state = true;
+    }
   }
 }
 
@@ -1467,11 +1510,14 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
   Clock::time_point send_time{};
   vds::AudioChunk sent_audio_chunk{};
   bool have_sent_audio_chunk = false;
+  bool restore_state_after_audio = false;
+  vds::DsState packet_state{};
 
   {
     std::lock_guard guard(state.mutex);
     const auto now = Clock::now();
     if (state.pending_audio_chunks.empty()) {
+      state.output_state.set_haptic_audio_active(false);
       if (!state.audio_out_stream_active || !state.audio_pcm_stream_active) {
         return kAudioFlushIdleSleep;
       }
@@ -1530,6 +1576,7 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
       const vds::AudioChunk &chunk = state.silent_audio_chunk;
       packet = state.haptics_builder.build_packet(chunk.haptics, chunk.speaker,
                                                   state.output_state.state());
+      packet_state = state.output_state.state();
       sending_keepalive = true;
       scheduled_send_time = state.next_haptics_send_time == Clock::time_point{}
                                 ? now
@@ -1566,6 +1613,7 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
       const vds::AudioChunk chunk = state.pending_audio_chunks.front();
       has_signal = chunk.has_signal;
       has_haptics_signal = chunk.has_haptics_signal;
+      state.output_state.set_haptic_audio_active(has_haptics_signal);
       vds::HapticsChunk haptics = chunk.haptics;
       for (std::int8_t &sample : haptics) {
         const auto limited = static_cast<std::int8_t>(std::clamp<int>(
@@ -1575,6 +1623,7 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
       }
       packet = state.haptics_builder.build_packet(haptics, chunk.speaker,
                                                   state.output_state.state());
+      packet_state = state.output_state.state();
       sent_audio_chunk = chunk;
       have_sent_audio_chunk = true;
       scheduled_send_time = state.next_haptics_send_time == Clock::time_point{}
@@ -1608,6 +1657,10 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
       blocked_count = state.audio_blocked_count;
       dropped_count = state.audio_dropped_count;
       pending_count = state.pending_audio_chunks.size();
+      if (pending_count == 0) {
+        state.output_state.set_haptic_audio_active(false);
+        restore_state_after_audio = true;
+      }
       if (!sending_keepalive) {
         send_interval = audio_output_interval_for_pending(
             pending_count, low_watermark_paced, high_watermark_catchup);
@@ -1620,6 +1673,9 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
         state.next_haptics_send_time = send_time + send_interval;
       }
       stale_dropped_count = state.audio_stale_dropped_count;
+    }
+    if (restore_state_after_audio) {
+      send_bt_state_if_changed(bluetooth, state, logger, bluetooth_mutex);
     }
     if (blocked_count == 1 || (blocked_count % 1000) == 0) {
       logger.log("audio", vds::LogLevel::Warn,
@@ -1641,9 +1697,15 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
     pending_after_pop = state.pending_audio_chunks.size();
     if (pending_after_pop == 0) {
       state.audio_jitter_buffer_start = {};
+      state.output_state.set_haptic_audio_active(false);
+      restore_state_after_audio = true;
     }
-    state.last_sent_state = state.output_state.state();
+    state.last_sent_state = packet_state;
     state.have_last_sent_state = true;
+    if (state.pending_bt_state && *state.pending_bt_state == packet_state) {
+      state.pending_bt_state.reset();
+      state.pending_bt_state_report.reset();
+    }
     if (sending_keepalive) {
       ++state.audio_keepalive_sent_count;
       keepalive_sent_count = state.audio_keepalive_sent_count;
@@ -1694,6 +1756,10 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
     if (state.next_haptics_send_time > send_time) {
       next_sleep = state.next_haptics_send_time - send_time;
     }
+  }
+
+  if (restore_state_after_audio) {
+    send_bt_state_if_changed(bluetooth, state, logger, bluetooth_mutex);
   }
 
   if (stale_dropped_now > 0 || (have_gap && send_gap >= kAudioSendGapWarn) ||
@@ -1891,6 +1957,14 @@ void audio_flush_loop(BluetoothTransport &bluetooth, BridgeState &state,
     enqueue_speaker_waveout_chunk(state);
     const auto sleep_duration =
         flush_pending_audio_chunk(bluetooth, state, logger, bluetooth_mutex);
+    bool retry_pending_state = false;
+    {
+      std::lock_guard guard(state.mutex);
+      retry_pending_state = state.pending_bt_state.has_value();
+    }
+    if (retry_pending_state) {
+      send_bt_state_if_changed(bluetooth, state, logger, bluetooth_mutex);
+    }
     maybe_log_audio_summary(bluetooth, state, logger);
     sleeper.sleep_for(sleep_duration);
   }

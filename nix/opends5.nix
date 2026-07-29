@@ -55,6 +55,7 @@ buildNpmPackage {
     mkdir -p "$out/share/opends5"
     mkdir -p "$out/share/opends5/node_modules"
     mkdir -p "$out/share/opends5/native"
+    mkdir -p "$out/share/opends5/vds-bin"
 
     cp -r "$companion/dist" \
       "$out/share/opends5/dist"
@@ -74,7 +75,14 @@ buildNpmPackage {
     cp "$companion/src/renderer/assets/test-speaker-tone-silence-tail.mp3" \
       "$out/share/opends5/native/test-speaker-tone-silence-tail.mp3"
 
+    install -Dm644 "$PWD/vds/99-vds-dualsense-wireplumber.conf" \
+      "$out/share/opends5/vds-bin/99-vds-dualsense-wireplumber.conf"
+
     makeWrapper ${electron_42}/bin/electron "$out/bin/opends5" \
+      --set-default OPENDS5_APP_ROOT \
+        "$out/share/opends5" \
+      --set-default OPENDS5_WIREPLUMBER_CONFIG \
+        "$out/share/opends5/vds-bin/99-vds-dualsense-wireplumber.conf" \
       --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath [
       libusb1
       stdenv.cc.cc.lib

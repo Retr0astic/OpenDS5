@@ -86,6 +86,8 @@ constexpr std::uint8_t kOutputPathHeadphones = 0x00;
 constexpr std::uint8_t kOutputPathSpeaker = 0x30;
 constexpr std::uint8_t kOutputPathMask = 0x30;
 constexpr std::uint8_t kOutputPowerSaveMicMute = 0x10;
+constexpr std::uint8_t kOutputPowerSaveHaptics = 0x04;
+constexpr std::uint8_t kOutputHapticsMute = 0x80;
 constexpr std::uint8_t kBtAudioSectionsEnable = 0xff;
 constexpr std::uint8_t kBtAudioSectionsDisableMic = 0xfe;
 constexpr std::uint8_t kBtMicReportId = 0x32;
@@ -846,6 +848,23 @@ void DsOutputState::set_companion_overrides(
 void DsOutputState::recompute_effective_state() {
   effective_state_ = state_;
 
+  // A host (notably Steam Input) may request legacy rumble and haptic
+  // mute/power-save for its own output. Keep that request in state_, but a
+  // nonzero audio-haptics chunk must be transmitted in native haptics mode.
+  // This is deliberately an effective-state overlay so the host state is
+  // restored as soon as rear-channel haptic PCM stops.
+  if (haptic_audio_active_) {
+    set_state_bit(effective_state_[0], 0, false); // enable_rumble_emulation
+    set_state_bit(effective_state_[0], 1, false); // use_rumble_not_haptics
+    set_state_bit(effective_state_[38], 2,
+                  false); // enable_improved_rumble_emulation
+    effective_state_[kOutputFlag1Offset] |=
+        kOutputFlag1PowerSaveControlEnable;
+    effective_state_[kOutputPowerSaveControlOffset] &=
+        static_cast<std::uint8_t>(~(kOutputPowerSaveHaptics |
+                                    kOutputHapticsMute));
+  }
+
   if (companion_.lightbar_override) {
     set_state_bit(effective_state_[1], 2, true); // allow_led_color
     std::array<std::uint8_t, 3> color{};
@@ -919,6 +938,14 @@ void DsOutputState::recompute_effective_state() {
         scale_byte(effective_state_[kOutputSpeakerVolumeOffset],
                    companion_.speaker_volume_percent);
   }
+}
+
+void DsOutputState::set_haptic_audio_active(bool active) {
+  if (haptic_audio_active_ == active) {
+    return;
+  }
+  haptic_audio_active_ = active;
+  recompute_effective_state();
 }
 
 void DsOutputState::apply_mic_select() {
@@ -1074,6 +1101,9 @@ bool DsOutputState::apply_usb_output_report(
 
 void DsOutputState::set_audio_out_stream_active(bool active,
                                                 bool headset_plugged) {
+  if (!active) {
+    haptic_audio_active_ = false;
+  }
   state_[kOutputFlag0Offset] |= kOutputFlag0AudioControlEnable;
   state_[kOutputHeadphoneVolumeOffset] = headphones_volume_;
 

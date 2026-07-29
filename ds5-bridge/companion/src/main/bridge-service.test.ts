@@ -883,6 +883,26 @@ describe('BridgeService', () => {
     expect(snapshot.settings.hapticsGainPercent).toBe(130);
   });
 
+  it('skips Linux test haptics when the helper reports an unavailable endpoint', async () => {
+    if (process.platform !== 'linux') return;
+    const service = serviceFixture();
+    audioHelperMock.playBridgeHapticsTestPattern.mockRejectedValueOnce(
+      new Error('status: capture-unavailable endpoint-missing-card. OpenDS5 vDS audio endpoint is not ready.')
+    );
+
+    const snapshot = await service.testHaptics();
+    expect(snapshot).toEqual(service.getSnapshot());
+    expect(audioHelperMock.playBridgeHapticsTestPattern).toHaveBeenCalledTimes(1);
+  });
+
+  it('still rejects unrelated Linux test haptics helper failures', async () => {
+    if (process.platform !== 'linux') return;
+    const service = serviceFixture();
+    audioHelperMock.playBridgeHapticsTestPattern.mockRejectedValueOnce(new Error('pw-play failed'));
+
+    await expect(service.testHaptics()).rejects.toThrow('pw-play failed');
+  });
+
 
 
 

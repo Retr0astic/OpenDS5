@@ -66,6 +66,10 @@ const HELPER_STDERR_MAX_CHARS = 8192;
 const HELPER_RELATIVE_PATH = process.platform === 'win32'
   ? path.join('native', 'AudioHelper', 'AudioHelper.exe')
   : path.join('native', 'audio-helper-linux.mjs');
+// The Nix launcher passes the app payload as an Electron argument rather than
+// placing it under Electron's resources directory. Keep that root explicit so
+// packaged helper lookup does not depend on process.cwd() or process.argv.
+const APP_ROOT_ENV = 'OPENDS5_APP_ROOT';
 const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
 
 const DEV_HELPER_RELATIVE_PATH = path.join(
@@ -1112,6 +1116,8 @@ export class VolumeGuardEngine extends EventEmitter {
 }
 
 export function resolveAudioHelperPath(): string {
+  const appRoot = process.env[APP_ROOT_ENV]?.trim();
+  const appRootCandidate = appRoot ? path.join(appRoot, HELPER_RELATIVE_PATH) : null;
   const packagedCandidate = process.resourcesPath ? path.join(process.resourcesPath, HELPER_RELATIVE_PATH) : null;
   const devHelperRelativePath = process.platform === 'win32'
     ? DEV_HELPER_RELATIVE_PATH
@@ -1121,6 +1127,7 @@ export function resolveAudioHelperPath(): string {
     path.resolve(__dirname, '..', '..', '..', devHelperRelativePath)
   ];
   const candidates = [
+    appRootCandidate,
     packagedCandidate,
     ...(isDevelopmentRuntime() ? devCandidates : [])
   ].filter((candidate): candidate is string => Boolean(candidate));

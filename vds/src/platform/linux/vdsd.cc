@@ -182,6 +182,7 @@ struct VirtualPort {
   std::optional<vds::DsState> pending_bt_state;
   std::optional<vds::BtStateReport> pending_bt_state_report;
   Clock::time_point next_haptics_send_time{};
+  vds::HapticLease haptic_lease;
   bool audio_out_stream_active = false;
   bool audio_in_stream_active = false;
   bool mic_muted = false;
@@ -633,6 +634,7 @@ void reset_virtual_port(VirtualPort &port) {
   port.pending_bt_state.reset();
   port.pending_bt_state_report.reset();
   port.next_haptics_send_time = {};
+  port.haptic_lease.clear();
   port.audio_out_stream_active = false;
   port.audio_in_stream_active = false;
   port.mic_muted = false;
@@ -656,6 +658,8 @@ void reset_virtual_port(VirtualPort &port) {
 void disconnect_virtual_port(VirtualPort &port, vds::Logger &logger) {
   port.pending_audio_chunks.clear();
   port.next_haptics_send_time = {};
+  port.haptic_lease.clear();
+  port.output_state.set_haptic_audio_active(false);
   port.audio_out_stream_active = false;
   port.audio_in_stream_active = false;
   port.mic_muted = false;
@@ -702,13 +706,17 @@ void handle_frame(const vds_frame_header &header,
       if (!port.audio_out_stream_active) {
         port.pending_audio_chunks.clear();
         port.extractor = vds::PcmAudioExtractor{};
+        port.haptic_lease.clear();
+        port.output_state.set_audio_out_stream_active(false,
+                                                      port.headset_plugged);
       } else {
         port.output_state.set_audio_out_stream_active(true,
                                                       port.headset_plugged);
-        if (bt_backend) {
-          forward_bt_state_if_changed(port, *bt_backend, trace_flags, logger,
-                                      "audio out interface");
-        }
+      }
+      if (bt_backend) {
+        refresh_pending_bt_state(port);
+        forward_bt_state_if_changed(port, *bt_backend, trace_flags, logger,
+                                    "audio out interface");
       }
     } else if (event.interface_type == VDS_USB_INTERFACE_AUDIO_IN) {
       port.audio_in_stream_active = event.altsetting != 0;
@@ -1546,6 +1554,7 @@ void sync_virtual_ports(std::vector<VirtualPort> &ports,
         .pending_bt_state = std::nullopt,
         .pending_bt_state_report = std::nullopt,
         .next_haptics_send_time = {},
+        .haptic_lease = {},
         .speaker_waveout_selected = true,
         .speaker_waveout_active = false,
         .speaker_waveout_phase = 0,
@@ -1765,9 +1774,19 @@ int next_wakeup_timeout_ms(std::span<const VirtualPort> ports,
       continue;
     }
     const auto port_index = find_port_index(ports, controller.device);
-    if (!port_index || ports[*port_index].pending_audio_chunks.empty()) {
+    if (!port_index) {
       continue;
     }
+
+    const auto lease_deadline = ports[*port_index].haptic_lease.deadline();
+    if (ports[*port_index].haptic_lease.active()) {
+      if (lease_deadline <= now) return 0;
+      const auto lease_wait =
+          std::chrono::ceil<std::chrono::milliseconds>(lease_deadline - now);
+      timeout_ms = std::min(timeout_ms, static_cast<int>(lease_wait.count()));
+    }
+
+    if (ports[*port_index].pending_audio_chunks.empty()) continue;
 
     const auto next_time = ports[*port_index].next_haptics_send_time;
     if (next_time == Clock::time_point{} || next_time <= now) {
@@ -1783,11 +1802,18 @@ int next_wakeup_timeout_ms(std::span<const VirtualPort> ports,
 bool flush_pending_audio_chunk(VirtualPort &port,
                                vds::BtL2capBackend &bt_backend,
                                std::uint32_t trace_flags, vds::Logger &logger) {
+  const auto now = Clock::now();
+  if (port.haptic_lease.expire(now)) {
+    port.output_state.set_haptic_audio_active(false);
+    refresh_pending_bt_state(port);
+    forward_bt_state_if_changed(port, bt_backend, trace_flags, logger,
+                                "haptic lease expired");
+  }
+
   if (port.pending_audio_chunks.empty()) {
     return true;
   }
 
-  const auto now = Clock::now();
   if (port.next_haptics_send_time != Clock::time_point{} &&
       now < port.next_haptics_send_time) {
     return true;
@@ -1817,6 +1843,11 @@ bool flush_pending_audio_chunk(VirtualPort &port,
   }
 
   const auto &chunk = port.pending_audio_chunks.front();
+  if (chunk.has_haptics_signal) {
+    port.haptic_lease.activate(now);
+    port.output_state.set_haptic_audio_active(true);
+    refresh_pending_bt_state(port);
+  }
   vds::HapticsChunk haptics = chunk.haptics;
   if (port.haptics_gain_percent != 100) {
     for (auto &sample : haptics) {
@@ -1854,8 +1885,9 @@ bool flush_pending_audio_chunk(VirtualPort &port,
   ++port.trace_state.bt_0x36_sent_count;
 
   const auto send_duration = Clock::now() - send_start;
+  const vds::DsState sent_state = port.output_state.state();
   port.pending_audio_chunks.pop_front();
-  port.last_sent_bt_state = port.output_state.state();
+  port.last_sent_bt_state = sent_state;
   if (port.pending_bt_state &&
       *port.pending_bt_state == *port.last_sent_bt_state) {
     port.pending_bt_state.reset();

@@ -1722,7 +1722,8 @@ export class BridgeService extends EventEmitter {
   }
   private isBridgeRenderEndpointUnavailableError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
-    return message.includes('Render endpoint matching') && message.includes('was not found');
+    return (message.includes('Render endpoint matching') && message.includes('was not found'))
+      || (process.platform === 'linux' && message.includes('status: capture-unavailable endpoint-'));
   }
 
   private skipBridgeHapticsTest(reason: string): BridgeSnapshot {

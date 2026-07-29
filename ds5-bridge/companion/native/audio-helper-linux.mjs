@@ -108,6 +108,68 @@ function isTaggedBridgeSink(object, cardId) {
     && String(props['device.id'] ?? '') === String(cardId);
 }
 
+const LEGACY_VDS_CARD = /^alsa_card\.usb-OpenDS5_vDS_[A-Za-z0-9_.-]+$/;
+const LEGACY_VDS_SINK = /^alsa_output\.usb-OpenDS5_vDS_[A-Za-z0-9_.-]+$/;
+// Some PipeWire/WirePlumber setups expose the physical DualSense ALSA card
+// without OpenDS5 metadata. Keep this compatibility path deliberately exact:
+// it must not broaden endpoint selection to arbitrary DualSense devices.
+const SONY_DUALSENSE_CARD = 'alsa_card.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller-00';
+const SONY_DUALSENSE_SINK = 'alsa_output.usb-Sony_Interactive_Entertainment_DualSense_Wireless_Controller-00.pro-output-0';
+function normalizeAudioPosition(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRequiredHapticsPosition(value) {
+  const position = normalizeAudioPosition(value);
+  return position?.length === REQUIRED_HAPTICS_POSITION.length
+    && position.every((channel, index) => channel === REQUIRED_HAPTICS_POSITION[index]);
+}
+
+function isLegacyVdsCard(object) {
+  return object?.type === 'PipeWire:Interface:Device'
+    && LEGACY_VDS_CARD.test(String(nodeProps(object)['device.name'] ?? ''));
+}
+function isLegacyVdsSink(object) {
+  return isAudioSink(object) && LEGACY_VDS_SINK.test(String(nodeProps(object)['node.name'] ?? ''));
+}
+function isSonyDualsenseCard(object) {
+  return object?.type === 'PipeWire:Interface:Device'
+    && nodeProps(object)['device.name'] === SONY_DUALSENSE_CARD
+    && hasVdsHcdAncestry(nodeProps(object));
+}
+function isSonyDualsenseSink(object) {
+  return isAudioSink(object) && nodeProps(object)['node.name'] === SONY_DUALSENSE_SINK;
+}
+function hasVdsHcdAncestry(props) {
+  return ['device.bus-path', 'device.sysfs.path'].some((key) => {
+    const value = props?.[key];
+    if (typeof value !== 'string') return false;
+    return value.split('/').some((component) => /^vds_hcd(?:\.\d+)?$/.test(component));
+  });
+}
+function endpointMetadataIssue(card, sink) {
+  const props = nodeProps(sink);
+  if (Number(props['audio.channels']) !== 4) return BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_COUNT;
+  const format = sink?.info?.params?.Format?.[0];
+  if (format && (Number(format.channels) !== 4
+    || !Array.isArray(format.position)
+    || format.position.length !== 4
+    || format.position.some((value, index) => value !== REQUIRED_HAPTICS_POSITION[index]))) {
+    return BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_MAP;
+  }
+  if (props['audio.position'] !== undefined && !isRequiredHapticsPosition(props['audio.position'])) {
+    return BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_MAP;
+  }
+  return null;
+}
+
 function inspectBridgeEndpoint(objects) {
   const cards = objects.filter(isTaggedVdsCard);
   if (cards.length === 0) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.MISSING_CARD };
@@ -127,22 +189,63 @@ function inspectBridgeEndpoint(objects) {
   if (profile !== 'pro-audio') return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.NOT_PRO_AUDIO };
   const props = nodeProps(sink);
   if (Number(props['audio.channels']) !== 4) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_COUNT };
-  const format = sink?.info?.params?.Format?.[0];
-  const position = format?.position;
-  if (Number(format?.channels) !== 4
-    || !Array.isArray(position)
-    || position.length !== 4
-    || position.some((value, index) => value !== REQUIRED_HAPTICS_POSITION[index])
-    || !Array.isArray(props['audio.position'])
-    || props['audio.position'].length !== 4
-    || props['audio.position'].some((value, index) => value !== REQUIRED_HAPTICS_POSITION[index])) {
-    return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.WRONG_CHANNEL_MAP };
+  const metadataIssue = endpointMetadataIssue(card, sink);
+  if (metadataIssue) return { endpoint: null, issue: metadataIssue };
+  return { endpoint: { card, sink }, issue: null };
+}
+
+function inspectLegacyBridgeEndpoint(objects) {
+  const cards = objects.filter(isLegacyVdsCard);
+  if (cards.length === 0) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.MISSING_CARD };
+  if (cards.length > 1) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.AMBIGUOUS };
+  const card = cards[0];
+  if ((nodeProps(card)['device.profile'] ?? nodeProps(card)['device.profile.name']) !== 'pro-audio') {
+    return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.NOT_PRO_AUDIO };
   }
+  const sinks = objects.filter(isLegacyVdsSink).filter((sink) => {
+    const props = nodeProps(sink);
+    return String(props['device.id'] ?? '') === String(card.id);
+  });
+  if (sinks.length === 0) {
+    return { endpoint: null, issue: objects.some(isLegacyVdsSink)
+      ? BRIDGE_ENDPOINT_ISSUES.PARENT_MISMATCH : BRIDGE_ENDPOINT_ISSUES.MISSING_SINK };
+  }
+  if (sinks.length > 1) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.AMBIGUOUS };
+  const metadataIssue = endpointMetadataIssue(card, sinks[0]);
+  if (metadataIssue) return { endpoint: null, issue: metadataIssue };
+  return { endpoint: { card, sink: sinks[0] }, issue: null };
+}
+
+function inspectSonyDualsenseEndpoint(objects) {
+  const cards = objects.filter(isSonyDualsenseCard);
+  if (cards.length === 0) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.MISSING_CARD };
+  if (cards.length > 1) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.AMBIGUOUS };
+  const card = cards[0];
+  const profile = nodeProps(card)['device.profile'] ?? nodeProps(card)['device.profile.name'];
+  if (profile !== 'pro-audio') return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.NOT_PRO_AUDIO };
+  const namedSinks = objects.filter(isSonyDualsenseSink);
+  const sinks = namedSinks.filter((sink) => String(nodeProps(sink)['device.id'] ?? '') === String(card.id));
+  if (sinks.length === 0) {
+    return { endpoint: null, issue: namedSinks.length > 0
+      ? BRIDGE_ENDPOINT_ISSUES.PARENT_MISMATCH : BRIDGE_ENDPOINT_ISSUES.MISSING_SINK };
+  }
+  if (sinks.length > 1) return { endpoint: null, issue: BRIDGE_ENDPOINT_ISSUES.AMBIGUOUS };
+  const sink = sinks[0];
+  const metadataIssue = endpointMetadataIssue(card, sink);
+  if (metadataIssue) return { endpoint: null, issue: metadataIssue };
   return { endpoint: { card, sink }, issue: null };
 }
 
 export function resolveBridgeEndpoint(objects) {
-  return inspectBridgeEndpoint(Array.isArray(objects) ? objects : []);
+  const list = Array.isArray(objects) ? objects : [];
+  const tagged = inspectBridgeEndpoint(list);
+  // Once a tagged vDS card is present, its result is authoritative—even when
+  // its sink is not ready yet. Falling through to a physical Sony endpoint in
+  // that state could route haptics to a different controller.
+  if (tagged.issue !== BRIDGE_ENDPOINT_ISSUES.MISSING_CARD) return tagged;
+  const legacy = inspectLegacyBridgeEndpoint(list);
+  if (legacy.endpoint || legacy.issue !== BRIDGE_ENDPOINT_ISSUES.MISSING_CARD) return legacy;
+  return inspectSonyDualsenseEndpoint(list);
 }
 
 async function findBridgeSink() {
