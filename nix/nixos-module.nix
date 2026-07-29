@@ -11,6 +11,11 @@
 
   system = pkgs.stdenv.hostPlatform.system;
   vdsUsers = cfg.users;
+  defaultPackage = self.packages.${system}.opends5;
+  effectiveVdsPackage =
+    if cfg.vdsPackage != null then cfg.vdsPackage
+    else if cfg.package == defaultPackage then cfg.package
+    else self.packages.${system}.vds;
 in {
   options.services.opends5 = {
     enable =
@@ -25,11 +30,16 @@ in {
     };
 
     vdsPackage = lib.mkOption {
-      type = lib.types.package;
-      default = self.packages.${system}.vds;
+      type = lib.types.nullOr lib.types.package;
+      default = null;
       defaultText =
-        lib.literalExpression "opends5.packages.\${pkgs.system}.vds";
-      description = "The vDS userspace package containing vdsd and vdsctl.";
+        lib.literalExpression "null (use services.opends5.package)";
+      description = ''
+        Optional package containing vdsd and vdsctl. An explicit value wins.
+        With the default bundled companion package, that bundle supplies vDS;
+        with a custom companion-only package, the flake's standalone vds package
+        is used for backward compatibility.
+      '';
     };
 
     maxPorts = lib.mkOption {
@@ -92,14 +102,14 @@ in {
 
     environment.systemPackages = [
       cfg.package
-      cfg.vdsPackage
+      effectiveVdsPackage
     ];
 
     services.udev.packages = [
-      cfg.vdsPackage
+      effectiveVdsPackage
     ];
 
-    environment.etc."wireplumber/wireplumber.conf.d/99-vds-dualsense.conf".source = "${cfg.vdsPackage}/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf";
+    environment.etc."wireplumber/wireplumber.conf.d/99-vds-dualsense.conf".source = "${effectiveVdsPackage}/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf";
 
     systemd.services.vdsd = {
       description = "vDS userspace daemon (OpenDS5)";
@@ -120,7 +130,7 @@ in {
       serviceConfig = {
         Type = "simple";
 
-        ExecStart = "${cfg.vdsPackage}/bin/vdsd";
+        ExecStart = "${effectiveVdsPackage}/bin/vdsd";
 
         Restart = "on-failure";
         RestartSec = "1s";

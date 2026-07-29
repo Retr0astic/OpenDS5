@@ -86,6 +86,17 @@ build runs on every 2022-or-newer distribution.
 
 ## NixOS
 
+The default flake package is a complete userspace bundle: the Electron
+companion, `vdsd`, `vdsctl`, udev rules, WirePlumber configuration, and the
+reference systemd unit. `nix run .#opends5` temporarily stops an active literal
+`vdsd.service`, runs the bundled daemon, starts the companion after readiness,
+and restores the service when the app exits. It requires a host-installed,
+setuid-capable `pkexec` wrapper (`/run/wrappers/bin/pkexec` on NixOS or
+`/usr/bin/pkexec` on conventional Linux systems) and an installed `vds_hcd`
+kernel module exposing at least the first virtual port as `/dev/vds0`. A
+SIGKILL or power loss can bypass cleanup;
+in that case restore the service with `sudo systemctl start vdsd.service`.
+
 NixOS is configured declaratively, so the installer never escalates and never
 modifies the system there. The repo ships a **flake** that replaces the whole
 installer — kernel module *and* userspace — with one import.

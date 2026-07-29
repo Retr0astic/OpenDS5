@@ -9,6 +9,7 @@
 , dbus
 , libopus
 , udev
+, kmod
 , version
 }:
 
@@ -41,6 +42,11 @@ stdenv.mkDerivation {
       $out/lib/udev/rules.d/99-vds-dualsense.rules
     install -Dm644 ../99-vds-dualsense-wireplumber.conf \
       $out/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf
+    mkdir -p $out/lib/systemd/system
+    substitute ../vdsd.service.in \
+      $out/lib/systemd/system/vdsd.service \
+      --replace-fail 'modprobe vds_hcd' '${kmod}/bin/modprobe vds_hcd' \
+      --replace-fail '@VDS_SYSTEMD_VDSD@' "$out/bin/vdsd"
     runHook postInstall
   '';
 

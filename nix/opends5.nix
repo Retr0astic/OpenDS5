@@ -8,6 +8,7 @@
   makeWrapper,
   pipewire,
   glib,
+  vds,
   version,
 }:
 buildNpmPackage {
@@ -57,6 +58,17 @@ buildNpmPackage {
     mkdir -p "$out/share/opends5/native"
     mkdir -p "$out/share/opends5/vds-bin"
 
+    ln -s ${vds}/bin/vdsd "$out/bin/vdsd"
+    ln -s ${vds}/bin/vdsctl "$out/bin/vdsctl"
+    mkdir -p "$out/lib/udev/rules.d" "$out/lib/systemd/system" \
+      "$out/share/wireplumber/wireplumber.conf.d"
+    ln -s ${vds}/lib/udev/rules.d/99-vds-dualsense.rules \
+      "$out/lib/udev/rules.d/99-vds-dualsense.rules"
+    ln -s ${vds}/lib/systemd/system/vdsd.service \
+      "$out/lib/systemd/system/vdsd.service"
+    ln -s ${vds}/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf \
+      "$out/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf"
+
     cp -r "$companion/dist" \
       "$out/share/opends5/dist"
 
@@ -75,14 +87,20 @@ buildNpmPackage {
     cp "$companion/src/renderer/assets/test-speaker-tone-silence-tail.mp3" \
       "$out/share/opends5/native/test-speaker-tone-silence-tail.mp3"
 
-    install -Dm644 "$PWD/vds/99-vds-dualsense-wireplumber.conf" \
+    ln -s "$out/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf" \
       "$out/share/opends5/vds-bin/99-vds-dualsense-wireplumber.conf"
+    ln -s "$out/lib/udev/rules.d/99-vds-dualsense.rules" \
+      "$out/share/opends5/vds-bin/99-vds-dualsense-udev.rules"
+    ln -s "$out/lib/systemd/system/vdsd.service" \
+      "$out/share/opends5/vds-bin/vdsd.service"
+    ln -s "$out/bin/vdsd" "$out/share/opends5/vds-bin/vdsd"
+    ln -s "$out/bin/vdsctl" "$out/share/opends5/vds-bin/vdsctl"
 
     makeWrapper ${electron_42}/bin/electron "$out/bin/opends5" \
       --set-default OPENDS5_APP_ROOT \
         "$out/share/opends5" \
       --set-default OPENDS5_WIREPLUMBER_CONFIG \
-        "$out/share/opends5/vds-bin/99-vds-dualsense-wireplumber.conf" \
+        "$out/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf" \
       --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath [
       libusb1
       stdenv.cc.cc.lib
