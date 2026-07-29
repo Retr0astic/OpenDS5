@@ -23,12 +23,29 @@ make_mock() {
 make_mock systemctl '
 echo "systemctl $*" >>"$TEST_LOG"
 case "$1" in
-  is-active) [ "${SERVICE_ACTIVE:-0}" = 1 ] && [ ! -e "$TEST_WORK/stopped" ] ;;
+  is-active)
+    if [ "${SERVICE_RACE:-0}" = 1 ]; then
+      if [ ! -e "$TEST_WORK/active-checked" ]; then
+        printf '1\n' >"$TEST_WORK/active-checked"
+      else
+        exit 1
+      fi
+    fi
+    [ "${SERVICE_ACTIVE:-0}" = 1 ] && [ ! -e "$TEST_WORK/stopped" ] ;;
+  show)
+    case "${SERVICE_MATCH:-other}" in
+      bundle) service_path=$TEST_WORK/bin/vdsd-bundle ;;
+      standalone) service_path=$TEST_WORK/bin/vdsd-standalone ;;
+      *) service_path=/old/vdsd ;;
+    esac
+    printf "{ path=%s ; argv[]=%s ; ignore_errors=no ; }\n" "$service_path" "$service_path" ;;
   stop) [ "${STOP_FAIL:-0}" != 1 ] || exit 1; : >"$TEST_WORK/stopped" ;;
   start) [ "${RESTORE_FAIL:-0}" != 1 ] || exit 1; : >"$TEST_WORK/restored" ;;
 esac'
 make_mock modprobe 'exit "${MODPROBE_STATUS:-0}"'
 make_mock vdsctl '
+[ "$1" = audio-stats ] && [ "${SERVICE_PROTOCOL:-1}" = 0 ] && exit 1
+[ "${SERVICE_RACE:-0}" = 1 ] && [ -e "$TEST_WORK/active-checked" ] && [ ! -e "$TEST_WORK/daemon-running" ] && exit 1
 [ "${SERVICE_ACTIVE:-0}" = 1 ] && [ ! -e "$TEST_WORK/stopped" ] && exit 0
 [ "${OLD_RESPONDER:-0}" = 1 ] && exit 0
 [ -e "$TEST_WORK/daemon-running" ] && [ "${READY_FAIL:-0}" != 1 ]'
@@ -43,14 +60,23 @@ if [ "${LOCK_FAIL:-0}" = 1 ]; then exit 1; fi
 exit 0'
 make_mock pkexec-nixos '
 echo nixos-pkexec >>"$TEST_LOG"
+[ "${SHELL:-}" = /bin/sh ] || { echo invalid-auth-shell >>"$TEST_LOG"; exit 125; }
 if [ "${AUTH_FAIL:-0}" = 1 ]; then exit 126; fi
-exec "$@"'
+"$@" &
+privileged_pid=$!
+echo "privileged-pid=$privileged_pid wrapper-pid=$PPID" >>"$TEST_LOG"
+if wait "$privileged_pid"; then exit 0; else exit $?; fi'
 make_mock pkexec-usr '
 echo usr-pkexec >>"$TEST_LOG"
+[ "${SHELL:-}" = /bin/sh ] || { echo invalid-auth-shell >>"$TEST_LOG"; exit 125; }
 if [ "${AUTH_FAIL:-0}" = 1 ]; then exit 126; fi
-exec "$@"'
+"$@" &
+privileged_pid=$!
+echo "privileged-pid=$privileged_pid wrapper-pid=$PPID" >>"$TEST_LOG"
+if wait "$privileged_pid"; then exit 0; else exit $?; fi'
 make_mock app '
 echo app >>"$TEST_LOG"
+echo "app-shell=${SHELL-}" >>"$TEST_LOG"
 if [ "${APP_DESCENDANT:-0}" = 1 ]; then sleep 20 & echo $! >"$TEST_WORK/descendant-pid"; fi
 [ "${APP_WAIT:-0}" != 1 ] || while :; do sleep 1; done
 exit "${APP_STATUS:-0}"'
@@ -65,6 +91,8 @@ substitute() {
     -e "s|@DEVICE_PATH@|$work/device|g" \
     -e "s|@FLOCK@|$work/bin/flock|g" \
     -e "s|@SYSTEMCTL@|$work/bin/systemctl|g" \
+    -e "s|@BUNDLE_VDSD@|$work/bin/vdsd-bundle|g" \
+    -e "s|@STANDALONE_VDSD@|$work/bin/vdsd-standalone|g" \
     -e "s|@MODPROBE@|$work/bin/modprobe|g" \
     -e "s|@VDSD@|$work/bin/vdsd|g" \
     -e "s|@VDSCTL@|$work/bin/vdsctl|g" \
@@ -73,6 +101,7 @@ substitute() {
     -e "s|@USR_PKEXEC@|$work/bin/pkexec-usr|g" \
     -e "s|@MKTEMP@|@MKTEMP@|g" \
     -e "s|@MKFIFO@|@MKFIFO@|g" \
+    -e "s|@MV@|@MV@|g" \
     -e "s|@RM@|@RM@|g" \
     -e "s|@GREP@|@GREP@|g" \
     -e "s|@ROOT_HELPER@|$work/root-helper|g" \
@@ -85,12 +114,14 @@ substitute "$src_dir/run-vdsd-root.sh" "$work/root-helper"
 sed -i \
   -e "s|@MKTEMP@|$(command -v mktemp)|g" \
   -e "s|@MKFIFO@|$(command -v mkfifo)|g" \
+  -e "s|@MV@|$(command -v mv)|g" \
   -e "s|@RM@|$(command -v rm)|g" \
   -e "s|@GREP@|$(command -v grep)|g" "$work/root-helper"
 substitute "$src_dir/run-opends5.sh" "$work/launcher"
 sed -i \
   -e "s|@MKTEMP@|$(command -v mktemp)|g" \
   -e "s|@MKFIFO@|$(command -v mkfifo)|g" \
+  -e "s|@MV@|$(command -v mv)|g" \
   -e "s|@RM@|$(command -v rm)|g" \
   -e "s|@GREP@|$(command -v grep)|g" "$work/launcher"
 
@@ -101,17 +132,47 @@ run_case() {
   shift
   : >"$work/log"
   rm -f "$work/stopped" "$work/restored"
-  rm -f "$work/daemon-running" "$work/descendant-pid"
+  rm -f "$work/daemon-running" "$work/descendant-pid" "$work/active-checked"
   "$@"
   echo "ok - $name"
 }
 
-run_case active-stop-restore env SERVICE_ACTIVE=1 "$work/launcher"
+run_case nix-shell-sanitized env SHELL=/nix/store/test-shell/bin/sh SERVICE_ACTIVE=1 "$work/launcher"
 grep -q nixos-pkexec "$work/log"
 ! grep -q usr-pkexec "$work/log"
+! grep -q invalid-auth-shell "$work/log"
+grep -q 'app-shell=/nix/store/test-shell/bin/sh' "$work/log"
 grep -q 'systemctl stop vdsd.service' "$work/log"
 test -e "$work/restored"
 grep -q daemon-cleanup "$work/log"
+grep -Eq 'privileged-pid=[0-9]+ wrapper-pid=[0-9]+' "$work/log"
+grep -q '^app$' "$work/log"
+
+run_case bundle-service-reused env SERVICE_ACTIVE=1 SERVICE_MATCH=bundle "$work/launcher"
+grep -q '^app$' "$work/log"
+! grep -q pkexec "$work/log"
+! grep -q 'systemctl stop' "$work/log"
+! grep -q daemon-start "$work/log"
+
+run_case standalone-service-reused env SERVICE_ACTIVE=1 SERVICE_MATCH=standalone "$work/launcher"
+grep -q '^app$' "$work/log"
+! grep -q pkexec "$work/log"
+! grep -q 'systemctl stop' "$work/log"
+! grep -q daemon-start "$work/log"
+
+run_case matching-service-protocol-mismatch-replaced env SERVICE_ACTIVE=1 SERVICE_MATCH=bundle SERVICE_PROTOCOL=0 "$work/launcher"
+grep -q nixos-pkexec "$work/log"
+grep -q 'systemctl stop vdsd.service' "$work/log"
+grep -q daemon-start "$work/log"
+
+run_case matching-service-race-replaced env SERVICE_ACTIVE=1 SERVICE_MATCH=bundle SERVICE_RACE=1 "$work/launcher"
+grep -q nixos-pkexec "$work/log"
+grep -q daemon-start "$work/log"
+
+run_case mismatched-service-replaced env SERVICE_ACTIVE=1 SERVICE_MATCH=other "$work/launcher"
+grep -q nixos-pkexec "$work/log"
+grep -q 'systemctl stop vdsd.service' "$work/log"
+grep -q daemon-start "$work/log"
 
 run_case inactive-stays-inactive env SERVICE_ACTIVE=0 "$work/launcher"
 test ! -e "$work/restored"
@@ -122,7 +183,8 @@ if env SERVICE_ACTIVE=1 STOP_FAIL=1 "$work/launcher" >/dev/null 2>&1; then exit 
 echo 'ok - stop failure'
 if env LOCK_FAIL=1 "$work/launcher" >/dev/null 2>&1; then exit 1; fi
 echo 'ok - concurrent lock'
-if env AUTH_FAIL=1 "$work/launcher" >/dev/null 2>&1; then exit 1; fi
+if timeout 3s env AUTH_FAIL=1 "$work/launcher" >"$work/auth.out" 2>&1; then exit 1; fi
+grep -q 'helper exited before readiness' "$work/auth.out"
 echo 'ok - auth cancellation'
 chmod -x "$work/bin/pkexec-nixos"
 run_case conventional-pkexec-fallback "$work/launcher"
@@ -134,7 +196,8 @@ chmod +x "$work/bin/pkexec-nixos" "$work/bin/pkexec-usr"
 echo 'ok - unavailable auth tool'
 if env READY_FAIL=1 "$work/launcher" >/dev/null 2>&1; then exit 1; fi
 echo 'ok - readiness failure'
-if env DAEMON_FAIL=1 "$work/launcher" >/dev/null 2>&1; then exit 1; fi
+if timeout 3s env DAEMON_FAIL=1 "$work/launcher" >"$work/daemon-fail.out" 2>&1; then exit 1; fi
+grep -q 'helper exited before readiness' "$work/daemon-fail.out"
 echo 'ok - daemon early exit'
 if env OLD_RESPONDER=1 "$work/launcher" >/dev/null 2>&1; then exit 1; fi
 ! grep -q 'systemctl stop vdsd.service' "$work/log"

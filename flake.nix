@@ -73,10 +73,15 @@
           mkdir -p $out/bin
           substitute ${./nix/run-opends5.sh} $out/bin/opends5-run \
             --replace-fail @SAFE_PATH@ ${pkgs.lib.makeBinPath [ pkgs.coreutils pkgs.gnugrep ]} \
+            --replace-fail @SYSTEMCTL@ ${pkgs.systemd}/bin/systemctl \
+            --replace-fail @BUNDLE_VDSD@ ${bundle}/bin/vdsd \
+            --replace-fail @STANDALONE_VDSD@ ${self.packages.${pkgs.stdenv.hostPlatform.system}.vds}/bin/vdsd \
+            --replace-fail @VDSCTL@ ${bundle}/bin/vdsctl \
             --replace-fail @NIXOS_PKEXEC@ /run/wrappers/bin/pkexec \
             --replace-fail @USR_PKEXEC@ /usr/bin/pkexec \
             --replace-fail @MKTEMP@ ${pkgs.coreutils}/bin/mktemp \
             --replace-fail @MKFIFO@ ${pkgs.coreutils}/bin/mkfifo \
+            --replace-fail @MV@ ${pkgs.coreutils}/bin/mv \
             --replace-fail @RM@ ${pkgs.coreutils}/bin/rm \
             --replace-fail @SLEEP@ ${pkgs.coreutils}/bin/sleep \
             --replace-fail @GREP@ ${pkgs.gnugrep}/bin/grep \
