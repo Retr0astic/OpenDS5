@@ -1,6 +1,7 @@
 # OpenDS5 Haptics Stream Protocol v1
 
-Status: implementation contract for the planned source-aware haptics transport.
+Status: wire contract and daemon-side queue primitives implemented in Step 6;
+native endpoint and Linux helper wiring remain in progress.
 
 ## Goals
 
@@ -63,7 +64,21 @@ frame_count: u16
 samples: frame_count × stereo samples
 ```
 
-The exact wire format must be fixed-width, endian-defined, bounded, and tested.
+The implemented frame is fixed-width little-endian and bounded:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 4 | magic `ODS5` (`0x3553444f` as a little-endian integer) |
+| 4 | 4 | protocol version (`1`) |
+| 8 | 4 | nonzero stream ID |
+| 12 | 8 | monotonically increasing sequence |
+| 20 | 8 | monotonic timestamp in nanoseconds |
+| 28 | 2 | frame count (`1..256`) |
+| 30 | 2 | reserved, must be zero |
+| 32 | `frame_count × 8` | interleaved stereo Float32 little-endian samples |
+
+The maximum packet is 2080 bytes. NaN and infinity samples, truncated or
+overlong packets, unknown versions, and nonzero reserved bits are rejected.
 
 Initial audio contract:
 
@@ -80,6 +95,9 @@ Initial audio contract:
 - Drop stale OpenDS5 frames when overloaded.
 - Never delay game audio to preserve app-generated frames.
 - Count drops, underruns, and sequence gaps.
+
+The daemon-side bounded queue drops its oldest OpenDS5 frame on overflow and
+records drops and forward sequence gaps. It never blocks the game output path.
 
 ## Lifecycle
 

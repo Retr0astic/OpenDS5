@@ -209,6 +209,12 @@ if(BUILD_TESTING)
                                 vds_config vds_common jsonl)
   add_test(NAME audio_stats_control_test
            COMMAND $<TARGET_FILE:audio_stats_control_test>)
+
+  add_executable(haptics_stream_test tests/haptics_stream_test.cc
+                 src/haptics_stream.cc)
+  target_include_directories(
+    haptics_stream_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  add_test(NAME haptics_stream_test COMMAND $<TARGET_FILE:haptics_stream_test>)
 endif()
 
 if(WIN32)
