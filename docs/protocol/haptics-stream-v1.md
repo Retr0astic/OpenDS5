@@ -42,6 +42,14 @@ GetHapticsStatus
 - Maximum frames per packet.
 - Stream ID.
 
+Step 5 policy compatibility uses the existing companion command
+`SET_AUDIO_REACTIVE_HAPTICS` and does not create the data-plane stream. Its
+persisted and observable policy is explicit: `off`, `mix`, or `replace`. These
+values are stored and reported only in Step 5; they do not change output
+ownership or arbitration. Mix/replace behavior belongs to Steps 7-8. On the
+legacy wire, `off` is `value=0`; enabled `mix` is `value=1, mode bit 0`;
+enabled `replace` is `value=1, mode bit 1`.
+
 ## Data frame
 
 Conceptual fields:
@@ -95,6 +103,14 @@ Capabilities include:
 
 Unknown major versions are rejected with an explicit error. Optional features
 are negotiated rather than inferred.
+
+Legacy reports without a mode payload decode as enabled `mix`, preserving
+existing clients. The policy and status fields are additive and backward
+compatible: `schemaVersion` remains `1`, older clients may ignore the appended
+fields, while JSONL status reports expose
+only signals owned by the current path. Dedicated OpenDS5 PCM, underrun, and
+limiter signals are explicitly false/zero until later plan steps add those
+owners.
 
 ## Security
 

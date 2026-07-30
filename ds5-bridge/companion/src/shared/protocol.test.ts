@@ -16,6 +16,7 @@ import {
   buildButtonRemapPayload,
   buildChordBindingsPayload,
   buildCommandReport,
+  hapticsPolicyFromSettings,
   isChordBindingAllowed,
   normalizeBridgePresetId,
   parseAudioDebugReport,
@@ -378,6 +379,13 @@ describe('companion protocol', () => {
     expect(report[8]).toBe(12);
     expect(report[9]).toBe(175);
     expect(report[10]).toBe(0);
+  });
+
+  it('maps persisted enabled/mode settings to the explicit policy contract', () => {
+    expect(hapticsPolicyFromSettings(false, 'mix')).toBe('off');
+    expect(hapticsPolicyFromSettings(false, 'replace')).toBe('off');
+    expect(hapticsPolicyFromSettings(true, 'mix')).toBe('mix');
+    expect(hapticsPolicyFromSettings(true, 'replace')).toBe('replace');
   });
 
   it('can build a Pico bootloader command report for an older protocol minor', () => {

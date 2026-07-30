@@ -43,6 +43,9 @@ std::string list_targets_request() {
 }
 
 std::string audio_stats_request() { return "{\"command\":\"audio-stats\"}\n"; }
+std::string haptics_status_request() {
+  return "{\"command\":\"haptics-status\",\"format\":\"json\"}\n";
+}
 
 std::string trace_request(const VdsctlTraceCommand &trace) {
   std::string request = "{";
@@ -71,6 +74,7 @@ std::string vdsctl_usage(std::string_view version,
           "  vdsctl list\n"
           "  vdsctl list-targets\n"
           "  vdsctl audio-stats\n"
+          "  vdsctl haptics-status --json\n"
           "  vdsctl trace on|off [--scope <scope>[,<scope>...]]\n"
           "\n"
           "trace scopes:\n"
@@ -93,6 +97,9 @@ VdsctlCommand parse_vdsctl_command(std::string_view command) {
   }
   if (command == "audio-stats") {
     return VdsctlCommand::AudioStats;
+  }
+  if (command == "haptics-status") {
+    return VdsctlCommand::HapticsStatus;
   }
   if (command == "trace") {
     return VdsctlCommand::Trace;
@@ -129,6 +136,9 @@ int run_vdsctl_app(int argc, char **argv, std::string_view version,
       break;
     case VdsctlCommand::AudioStats:
       std::cout << run_vdsctl_audio_stats(argc, platform.request_control);
+      break;
+    case VdsctlCommand::HapticsStatus:
+      std::cout << run_vdsctl_haptics_status(argc, argv, platform.request_control);
       break;
     case VdsctlCommand::Trace:
       std::cout << run_vdsctl_trace(argc, argv, platform.request_control);
@@ -237,6 +247,15 @@ std::string run_vdsctl_audio_stats(
     const std::function<std::string(const std::string &)> &request_control) {
   require_vdsctl_arg_count(argc, 2);
   return request_control(audio_stats_request());
+}
+
+std::string run_vdsctl_haptics_status(
+    int argc, char **argv,
+    const std::function<std::string(const std::string &)> &request_control) {
+  if (argc != 3 || std::string_view(argv[2]) != "--json") {
+    throw std::runtime_error("haptics-status requires --json");
+  }
+  return request_control(haptics_status_request());
 }
 
 std::string run_vdsctl_trace(

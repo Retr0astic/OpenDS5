@@ -85,6 +85,19 @@ std::string trim_command(std::string command) {
   return command;
 }
 
+std::string haptics_policy_name(std::uint8_t policy) {
+  switch (policy) {
+  case 0:
+    return "off";
+  case 1:
+    return "mix";
+  case 2:
+    return "replace";
+  default:
+    return "unavailable";
+  }
+}
+
 std::uint32_t parse_trace_scope(std::string_view scope) {
   std::uint32_t flags = 0;
   while (true) {
@@ -468,6 +481,30 @@ std::string format_vdsd_control_audio_stats(
     line += ',';
     line += jsonl_uint64_field("maxPendingQueueDepth",
                                stat.max_pending_queue_depth);
+    line += ',';
+    line += jsonl_string_field("hapticsPolicy", stat.haptics_policy);
+    line += ',';
+    line += jsonl_bool_field("gamePcmActive", stat.game_pcm_active);
+    line += ',';
+    line += jsonl_uint64_field("gameLegacyMotorLeft", stat.game_legacy_motor_left);
+    line += ',';
+    line += jsonl_uint64_field("gameLegacyMotorRight", stat.game_legacy_motor_right);
+    line += ',';
+    line += jsonl_bool_field("openDs5PcmActive", stat.opends5_pcm_active);
+    line += ',';
+    line += jsonl_string_field("effectivePhysicalMode", stat.effective_physical_mode);
+    line += ',';
+    line += jsonl_uint64_field("gamePcmPeakLeft", stat.game_pcm_peak_left);
+    line += ',';
+    line += jsonl_uint64_field("gamePcmPeakRight", stat.game_pcm_peak_right);
+    line += ',';
+    line += jsonl_uint64_field("openDs5PcmPeakLeft", stat.opends5_pcm_peak_left);
+    line += ',';
+    line += jsonl_uint64_field("openDs5PcmPeakRight", stat.opends5_pcm_peak_right);
+    line += ',';
+    line += jsonl_uint64_field("underrunCount", stat.underrun_count);
+    line += ',';
+    line += jsonl_bool_field("limiting", stat.limiting);
     line += "}\n";
     reply += line;
   }
@@ -746,6 +783,17 @@ std::string handle_vdsd_control_command(
           "command",
       };
       reject_unknown_jsonl_fields(fields, expected, context);
+      return format_vdsd_control_audio_stats(audio_stats);
+    }
+    if (command == "haptics-status") {
+      static constexpr std::string_view expected[] = {
+          "command",
+          "format",
+      };
+      reject_unknown_jsonl_fields(fields, expected, context);
+      if (require_jsonl_string(fields, "format", context) != "json") {
+        throw std::runtime_error("haptics-status format must be json");
+      }
       return format_vdsd_control_audio_stats(audio_stats);
     }
     if (command == "trace") {

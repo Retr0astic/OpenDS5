@@ -3,9 +3,10 @@
 ## Problem
 
 The temporary 100 ms lease treats recent nonzero rear-channel PCM as haptics
-ownership. Continuous OpenDS5-generated PCM renews the lease indefinitely,
-forces native audio-haptics mode, and prevents compatible game rumble from
-reaching the controller.
+ownership. Continuous game PCM renews the lease indefinitely, forces native
+audio-haptics mode, and prevents compatible game rumble from reaching the
+controller. Step 5 policy is persisted and observable only; it does not alter
+this behavior. Mix/replace arbitration is future work in Steps 7-8.
 
 Shortening the timeout does not create coexistence; it creates mode flapping.
 
@@ -83,6 +84,16 @@ Expose per-port:
 - Underruns.
 - Limiter/clipping count.
 - Last timestamps.
+
+Step 5 exposes persisted policy and currently owned signals through
+`vdsctl haptics-status --json`. Each port reports `off`, `mix`, or `replace`,
+game PCM activity/peaks, decoded legacy motor values, lease-derived physical
+mode, and queue/drop counters. Policy is observable only in this step; it does
+not claim output ownership or change arbitration. Dedicated OpenDS5 PCM
+activity/peaks, underruns, and limiting are false/zero because the existing
+path does not distinguish those sources or implement those counters yet. The continuously renewed
+`HapticLease` remains for legacy behavior and is covered by a regression test;
+removal belongs to Step 9.
 
 ## Validation
 

@@ -32,6 +32,7 @@ import {
   buildButtonRemapPayload,
   normalizeChordControllerSettingStepPercent,
   normalizeBridgePresetId,
+  hapticsPolicyFromSettings,
   pollingRateModeValue
 } from '../shared/protocol';
 import { gameSettingsProfileId } from '../shared/game-settings';
@@ -42,6 +43,7 @@ import type {
   AudioReactiveHapticsBassFocus,
   AudioReactiveHapticsConfig,
   AudioReactiveHapticsMode,
+  HapticsPolicy,
   AudioOutputDevice,
   AudioReactiveHapticsRelease,
   AudioReactiveHapticsResponse,
@@ -399,6 +401,11 @@ function triggerEffectV2ExtraPayload(effect: AdaptiveTriggerEffectV2Targeted): n
 
 function audioReactiveHapticsModeValue(mode: AudioReactiveHapticsMode): number {
   return mode === 'replace' ? 1 : 0;
+}
+
+function audioReactiveHapticsPolicyValue(policy: HapticsPolicy): number {
+  // Keep the legacy firmware wire values: enabled/mix=0 and replace=1.
+  return policy === 'replace' ? 1 : 0;
 }
 
 function audioReactiveHapticsBassFocusValue(focus: AudioReactiveHapticsBassFocus): number {
@@ -1989,7 +1996,12 @@ export class BridgeService extends EventEmitter {
 
   private audioReactiveHapticsCommandPayload(settings: CompanionSettings): number[] {
     const gain = Math.max(0, Math.min(200, Math.round(settings.audioReactiveHapticsGainPercent)));
-    const mode = audioReactiveHapticsModeValue(settings.audioReactiveHapticsMode)
+    const policy = hapticsPolicyFromSettings(
+      this.audioReactiveHapticsCommandEnabled(settings), settings.audioReactiveHapticsMode);
+    // Preserve the old mode byte even for value=0 (off); the daemon uses the
+    // value field to decode off, while legacy firmware may still inspect mode.
+    const mode = audioReactiveHapticsPolicyValue(policy)
+      | (policy === 'off' ? audioReactiveHapticsModeValue(settings.audioReactiveHapticsMode) : 0)
       | (this.audioReactiveHapticsSuppressesClassicRumble(settings)
         ? AUDIO_REACTIVE_HAPTICS_SUPPRESS_CLASSIC_RUMBLE_MODE_FLAG
         : 0);

@@ -140,6 +140,8 @@ struct TraceState {
   std::uint64_t nonzero_haptics_chunk_count = 0;
   std::uint64_t bt_0x36_sent_count = 0;
   std::uint64_t max_pending_queue_depth = 0;
+  std::uint32_t game_pcm_peak_left = 0;
+  std::uint32_t game_pcm_peak_right = 0;
   std::uint64_t bt_input_count = 0;
   std::uint64_t bt_mic_packet_count = 0;
   std::uint64_t bt_mic_drop_count = 0;
@@ -193,6 +195,7 @@ struct VirtualPort {
   bool speaker_waveout_active = false;
   std::uint32_t speaker_waveout_phase = 0;
   std::uint16_t haptics_gain_percent = 100;
+  std::uint8_t haptics_policy = 0;
   // Speaker/haptics queue depth in 10 ms chunks, from the companion
   // SET_HAPTICS_BUFFER_LENGTH setting; defaults match the old constants.
   std::size_t max_pending_audio_chunks = kMaxPendingAudioChunks;
@@ -748,6 +751,30 @@ void handle_frame(const vds_frame_header &header,
   if (valid_usb_audio_frame) {
     ++port.trace_state.audio_usb_frame_count;
   }
+
+  std::array<int, VDS_AUDIO_CHANNELS> peaks{};
+  bool haptics_nonzero = false;
+  if (valid_usb_audio_frame) {
+    const std::size_t frame_size = VDS_AUDIO_CHANNELS * sizeof(std::int16_t);
+    const std::size_t frames = payload.size() / frame_size;
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+      const std::uint8_t *base = payload.data() + frame * frame_size;
+      for (std::size_t channel = 0; channel < VDS_AUDIO_CHANNELS; ++channel) {
+        const auto low =
+            static_cast<std::uint16_t>(base[channel * sizeof(std::int16_t)]);
+        const auto high = static_cast<std::uint16_t>(
+                              base[channel * sizeof(std::int16_t) + 1])
+                          << 8;
+        const auto sample = static_cast<std::int16_t>(low | high);
+        peaks[channel] =
+            std::max(peaks[channel], std::abs(static_cast<int>(sample)));
+      }
+    }
+    haptics_nonzero = peaks[2] != 0 || peaks[3] != 0;
+    port.trace_state.game_pcm_peak_left = static_cast<std::uint32_t>(peaks[2]);
+    port.trace_state.game_pcm_peak_right = static_cast<std::uint32_t>(peaks[3]);
+  }
+
   if (output_trace) {
     std::ostringstream line;
     line << port.path << " frame " << vds::frame_type_name(header.type)
@@ -755,24 +782,6 @@ void handle_frame(const vds_frame_header &header,
 
     bool emit_trace = true;
     if (valid_usb_audio_frame) {
-      std::array<int, VDS_AUDIO_CHANNELS> peaks{};
-      const std::size_t frame_size = VDS_AUDIO_CHANNELS * sizeof(std::int16_t);
-      const std::size_t frames = payload.size() / frame_size;
-      for (std::size_t frame = 0; frame < frames; ++frame) {
-        const std::uint8_t *base = payload.data() + frame * frame_size;
-        for (std::size_t channel = 0; channel < VDS_AUDIO_CHANNELS; ++channel) {
-          const auto low =
-              static_cast<std::uint16_t>(base[channel * sizeof(std::int16_t)]);
-          const auto high = static_cast<std::uint16_t>(
-                                base[channel * sizeof(std::int16_t) + 1])
-                            << 8;
-          const auto sample = static_cast<std::int16_t>(low | high);
-          peaks[channel] =
-              std::max(peaks[channel], std::abs(static_cast<int>(sample)));
-        }
-      }
-
-      const bool haptics_nonzero = peaks[2] != 0 || peaks[3] != 0;
       emit_trace =
           port.trace_state.audio_usb_frame_count == 1 ||
           port.trace_state.audio_usb_frame_count % 250 == 0 ||
@@ -2282,6 +2291,18 @@ void handle_control_client(int control_fd, std::span<VirtualPort> ports,
         .pending_queue_depth =
             static_cast<std::uint64_t>(port.pending_audio_chunks.size()),
         .max_pending_queue_depth = port.trace_state.max_pending_queue_depth,
+        .haptics_policy = vds::haptics_policy_name(port.haptics_policy),
+        .game_pcm_active = port.audio_out_stream_active,
+        .game_legacy_motor_left = port.output_state.legacy_rumble_left(),
+        .game_legacy_motor_right = port.output_state.legacy_rumble_right(),
+        .opends5_pcm_active = false,
+        .effective_physical_mode = port.haptic_lease.active() ? "native-audio" : "legacy-rumble",
+        .game_pcm_peak_left = port.trace_state.game_pcm_peak_left,
+        .game_pcm_peak_right = port.trace_state.game_pcm_peak_right,
+        .opends5_pcm_peak_left = 0,
+        .opends5_pcm_peak_right = 0,
+        .underrun_count = 0,
+        .limiting = false,
     });
   }
 
@@ -2422,6 +2443,7 @@ void apply_companion_state(std::vector<VirtualPort> &ports,
   }
 
   for (auto &port : ports) {
+    port.haptics_policy = settings.haptics_policy;
     ControllerRuntime *controller =
         controller_for_port(controllers, port.path);
     if (controller == nullptr || !controller->backend ||

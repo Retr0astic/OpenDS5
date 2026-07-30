@@ -845,6 +845,14 @@ void DsOutputState::set_companion_overrides(
   recompute_effective_state();
 }
 
+std::uint8_t DsOutputState::legacy_rumble_left() const {
+  return effective_state_[offsetof(vds_set_state_data, rumble_emulation_left)];
+}
+
+std::uint8_t DsOutputState::legacy_rumble_right() const {
+  return effective_state_[offsetof(vds_set_state_data, rumble_emulation_right)];
+}
+
 void DsOutputState::recompute_effective_state() {
   effective_state_ = state_;
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -29,6 +30,7 @@ bool bit(std::uint8_t value, unsigned position) {
 } // namespace
 
 int main() {
+  using namespace std::chrono_literals;
   const auto host_report = legacy_host_report();
   vds::DsOutputState first;
   assert(first.apply_usb_output_report(host_report));
@@ -49,6 +51,30 @@ int main() {
   assert(!bit(first.state()[kImprovedRumbleOffset], 2));
   assert(!bit(first.state()[kPowerSaveOffset], 2));
   assert(!bit(first.state()[kPowerSaveOffset], 7));
+  // Model the daemon's deterministic lease transitions without sleeping: each
+  // nonzero chunk renews the deadline, and legacy rumble stays suppressed
+  // until the final expiry.
+  const auto lease_start = vds::HapticLease::TimePoint{} + std::chrono::seconds(1);
+  vds::HapticLease lease;
+  const auto consume_nonzero_chunk = [&](vds::HapticLease::TimePoint now) {
+    lease.activate(now);
+    first.set_haptic_audio_active(true);
+    assert(!bit(first.state()[0], 0));
+    assert(!bit(first.state()[0], 1));
+    assert(!bit(first.state()[kImprovedRumbleOffset], 2));
+  };
+  consume_nonzero_chunk(lease_start);
+  consume_nonzero_chunk(lease_start + 50ms);
+  consume_nonzero_chunk(lease_start + 100ms);
+  assert(lease.deadline() == lease_start + 200ms);
+  assert(!lease.expire(lease_start + 199ms));
+  assert(!bit(first.state()[0], 1));
+  assert(!bit(first.state()[kImprovedRumbleOffset], 2));
+  assert(lease.expire(lease_start + 200ms));
+  first.set_haptic_audio_active(false);
+  assert(bit(first.state()[0], 0));
+  assert(bit(first.state()[0], 1));
+  assert(bit(first.state()[kImprovedRumbleOffset], 2));
   for (std::size_t i = 0; i < first.state().size(); ++i) {
     if (i == 0 || i == 1 || i == kPowerSaveOffset ||
         i == kImprovedRumbleOffset) continue;

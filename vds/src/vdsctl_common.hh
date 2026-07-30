@@ -16,6 +16,7 @@ enum class VdsctlCommand {
   List,
   ListTargets,
   AudioStats,
+  HapticsStatus,
   Trace,
 };
 
@@ -49,6 +50,9 @@ std::string run_vdsctl_list_targets(
     const std::function<std::string(const std::string &)> &request_control);
 std::string run_vdsctl_audio_stats(
     int argc,
+    const std::function<std::string(const std::string &)> &request_control);
+std::string run_vdsctl_haptics_status(
+    int argc, char **argv,
     const std::function<std::string(const std::string &)> &request_control);
 std::string run_vdsctl_trace(
     int argc, char **argv,

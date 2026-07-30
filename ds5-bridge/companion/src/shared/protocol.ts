@@ -170,6 +170,15 @@ export type AudioReactiveHapticsSource =
   | AudioReactiveHapticsAppSource
   | AudioReactiveHapticsOutputDeviceSource;
 export type AudioReactiveHapticsMode = 'mix' | 'replace';
+/** Explicit source policy. `enabled === false` is the persisted legacy form of `off`. */
+export type HapticsPolicy = 'off' | 'mix' | 'replace';
+
+export function hapticsPolicyFromSettings(
+  enabled: boolean,
+  mode: AudioReactiveHapticsMode
+): HapticsPolicy {
+  return enabled ? mode : 'off';
+}
 export type AudioReactiveHapticsBassFocus = 'deep' | 'balanced' | 'punchy' | 'wide';
 export type AudioReactiveHapticsResponse = 'subtle' | 'balanced' | 'strong';
 export type AudioReactiveHapticsAttack = 'soft' | 'balanced' | 'fast' | 'sharp';

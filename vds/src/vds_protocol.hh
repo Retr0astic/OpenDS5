@@ -196,6 +196,8 @@ public:
   BtInitReport build_bt_init_report();
   BtStateReport build_bt_state_report();
   const DsState &state() const { return effective_state_; }
+  std::uint8_t legacy_rumble_left() const;
+  std::uint8_t legacy_rumble_right() const;
 
 private:
   void recompute_effective_state();

@@ -32,6 +32,8 @@ std::vector<char *> argv_pointers(std::vector<std::string> &values) {
 int main() {
   assert(vds::parse_vdsctl_command("audio-stats") ==
          vds::VdsctlCommand::AudioStats);
+  assert(vds::parse_vdsctl_command("haptics-status") ==
+         vds::VdsctlCommand::HapticsStatus);
   assert(vds::parse_vdsctl_command("list") == vds::VdsctlCommand::List);
 
   std::string request;
@@ -44,6 +46,11 @@ int main() {
   assert(vds::run_vdsctl_audio_stats(static_cast<int>(pointers.size()),
                                      capture) == "reply\n");
   assert(request == "{\"command\":\"audio-stats\"}\n");
+  args = argv_values({"vdsctl", "haptics-status", "--json"});
+  pointers = argv_pointers(args);
+  assert(vds::run_vdsctl_haptics_status(static_cast<int>(pointers.size()),
+                                        pointers.data(), capture) == "reply\n");
+  assert(request == "{\"command\":\"haptics-status\",\"format\":\"json\"}\n");
   args.push_back("extra");
   pointers = argv_pointers(args);
   bool rejected_extra = false;
@@ -59,7 +66,10 @@ int main() {
 
   const std::uint64_t large = static_cast<std::uint64_t>(UINT32_MAX) + 17;
   const std::vector<vds::VdsdControlAudioStats> stats = {
-      {.port = 2, .path = "/dev/vds2", .audio_out_stream_active = false},
+      {.port = 2,
+       .path = "/dev/vds2",
+       .haptics_policy = "mix",
+       .audio_out_stream_active = false},
       {.port = 0,
        .path = "/dev/vds0",
        .audio_out_stream_active = true,
@@ -71,6 +81,15 @@ int main() {
        .blocked_drop_count = large + 5,
        .pending_queue_depth = large + 6,
        .max_pending_queue_depth = large + 7},
+      {.port = 1,
+       .path = "/dev/vds1",
+       .haptics_policy = "replace",
+       .game_pcm_active = true,
+       .game_legacy_motor_left = 12,
+       .game_legacy_motor_right = 34,
+       .effective_physical_mode = "native-audio",
+       .game_pcm_peak_left = 400,
+       .underrun_count = 0},
   };
   const std::string serialized = vds::format_vdsd_control_audio_stats(stats);
   assert(serialized.find(
@@ -78,11 +97,17 @@ int main() {
          0);
   assert(serialized.find("\"audioOutStreamActive\":false") !=
          std::string::npos);
+  assert(serialized.find("\"path\":\"/dev/vds2\"") <
+         serialized.find("\"hapticsPolicy\":\"mix\"") );
   assert(serialized.find("\"audioOutStreamActive\":true") !=
          std::string::npos);
   assert(serialized.find(std::to_string(large + 7)) != std::string::npos);
   assert(serialized.find("nonZeroHapticsChunkCount") <
          serialized.find("bt0x36SentCount"));
+  assert(serialized.find("\"hapticsPolicy\":\"replace\"") !=
+         std::string::npos);
+  assert(serialized.find("\"openDs5PcmActive\":false") !=
+         std::string::npos);
   assert(serialized.find("/dev/vds2") < serialized.find("/dev/vds0"));
 
   vds::CompanionRuntime companion;
@@ -94,6 +119,15 @@ int main() {
       {}, {}, [] { return std::vector<vds::ControllerTarget>{}; }, trace_flags,
       reload_requested, companion, logger, stats);
   assert(unknown.find("\"OK\":false") != std::string::npos);
+
+  const std::string status = vds::handle_vdsd_control_command(
+      "{\"command\":\"haptics-status\",\"format\":\"json\"}",
+      "/tmp/no-vds-db", {}, {},
+      [] { return std::vector<vds::ControllerTarget>{}; }, trace_flags,
+      reload_requested, companion, logger, stats);
+  assert(status.find("\"hapticsPolicy\":\"replace\"") !=
+         std::string::npos);
+  assert(status.find("\"schemaVersion\":1") != std::string::npos);
 
   return 0;
 }

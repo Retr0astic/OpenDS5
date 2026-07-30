@@ -75,7 +75,21 @@ struct VdsdControlAudioStats {
   std::uint64_t blocked_drop_count = 0;
   std::uint64_t pending_queue_depth = 0;
   std::uint64_t max_pending_queue_depth = 0;
+  std::string haptics_policy = "off";
+  bool game_pcm_active = false;
+  std::uint8_t game_legacy_motor_left = 0;
+  std::uint8_t game_legacy_motor_right = 0;
+  bool opends5_pcm_active = false; // dedicated OpenDS5 PCM is Step 6
+  std::string effective_physical_mode = "unavailable";
+  std::uint32_t game_pcm_peak_left = 0;
+  std::uint32_t game_pcm_peak_right = 0;
+  std::uint32_t opends5_pcm_peak_left = 0;
+  std::uint32_t opends5_pcm_peak_right = 0;
+  std::uint64_t underrun_count = 0;
+  bool limiting = false;
 };
+
+std::string haptics_policy_name(std::uint8_t policy);
 
 enum class VdsdWorkerLaunchStatus {
   Ready,

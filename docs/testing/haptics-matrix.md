@@ -2,6 +2,13 @@
 
 ## Automated policy/source matrix
 
+Step 5 coverage verifies persisted `enabled + mode` decoding to explicit
+`off`/`mix`/`replace`, legacy wire serialization, and
+`vdsctl haptics-status --json` control output. Policy is persisted/observable
+only; it does not change output ownership. Mix/replace arbitration and the
+source matrix below are future Steps 7-8. Dedicated OpenDS5 PCM, underrun, and
+limiting fields remain false/zero until those steps add their owners.
+
 For every policy test:
 
 | Game PCM | Game legacy | OpenDS5 PCM |
@@ -15,7 +22,7 @@ For every policy test:
 | on | on | off |
 | on | on | on |
 
-Expected policy rules:
+Future source/arbitration expectations for Steps 7-8:
 
 ### Off
 

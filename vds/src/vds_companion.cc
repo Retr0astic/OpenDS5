@@ -312,7 +312,14 @@ std::uint8_t apply_command(CompanionRuntime &runtime,
   case 0x12: // SET_POLLING_RATE_MODE
   case 0x19: // SET_DUPLEX_ENABLED
   case 0x1D: // SET_SPEAKER_VOLUME_SHORTCUT_ENABLED
-  case 0x22: // SET_AUDIO_REACTIVE_HAPTICS
+  case 0x22: { // SET_AUDIO_REACTIVE_HAPTICS
+    if (value == 0) {
+      settings.haptics_policy = 0; // legacy disabled form: off
+    } else {
+      settings.haptics_policy = (report[11] & 0x01) != 0 ? 2 : 1;
+    }
+    return kAckOk;
+  }
   case 0x25: // SET_CLASSIC_RUMBLE_V1
   case 0x32: // SET_SPEAKER_GAIN
     return kAckOk;
