@@ -6,8 +6,8 @@ Haptics state is source- and policy-driven. The daemon no longer treats recent
 rear-channel PCM as global ownership; continuous game PCM cannot renew or
 expire any controller-wide lease. Explicit `replace` policy forces native
 audio-haptics mode, and prevents compatible game rumble from reaching the
-controller. Step 5 policy is persisted and observable only; it does not alter
-this behavior. Mix/replace arbitration is future work in Steps 7-8.
+controller. Source and policy arbitration is explicit and per-port; source
+closure restores pure game behavior immediately.
 
 Shortening the timeout does not create coexistence; it creates mode flapping.
 

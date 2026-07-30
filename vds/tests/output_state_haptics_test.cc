@@ -36,15 +36,15 @@ int main() {
   const auto base_state = first.state();
 
   // Speaker-only and silent PCM never enter audio-haptics arbitration.
-  first.set_haptic_output_override(false);
+  first.set_native_haptics_active(false);
   assert(bit(first.state()[0], 0));
   assert(bit(first.state()[0], 1));
   assert(bit(first.state()[kImprovedRumbleOffset], 2));
   assert(bit(first.state()[kPowerSaveOffset], 2));
   assert(bit(first.state()[kPowerSaveOffset], 7));
 
-  // A nonzero rear-channel chunk temporarily forces native audio haptics.
-  first.set_haptic_output_override(true);
+  // An active native-haptics source forces native audio haptics.
+  first.set_native_haptics_active(true);
   assert(!bit(first.state()[0], 0));
   assert(!bit(first.state()[0], 1));
   assert(!bit(first.state()[kImprovedRumbleOffset], 2));
@@ -52,7 +52,7 @@ int main() {
   assert(!bit(first.state()[kPowerSaveOffset], 7));
   // The explicit source/policy decision remains active until changed; PCM
   // timing and silence cannot expire it.
-  first.set_haptic_output_override(false);
+  first.set_native_haptics_active(false);
   assert(bit(first.state()[0], 0));
   assert(bit(first.state()[0], 1));
   assert(bit(first.state()[kImprovedRumbleOffset], 2));
@@ -64,7 +64,7 @@ int main() {
 
   // The same effective overlay is present in a constructed Bluetooth state
   // packet and unrelated host-owned bytes remain untouched.
-  first.set_haptic_output_override(true);
+  first.set_native_haptics_active(true);
   const auto bt_report = first.build_bt_state_report();
   assert(!bit(bt_report[kBtStateOffset + 0], 0));
   assert(!bit(bt_report[kBtStateOffset + 0], 1));
@@ -81,7 +81,7 @@ int main() {
   assert(!bit(first.state()[0], 1));
 
   // The exact host request is restored after the haptic chunk ends.
-  first.set_haptic_output_override(false);
+  first.set_native_haptics_active(false);
   assert(bit(first.state()[0], 0));
   assert(!bit(first.state()[0], 1));
   assert(bit(first.state()[kImprovedRumbleOffset], 2));
@@ -90,13 +90,13 @@ int main() {
 
   // A replace-policy decision remains explicit across game audio routing
   // changes. Stopping the audio-out stream must not restore legacy rumble.
-  first.set_haptic_output_override(true);
+  first.set_native_haptics_active(true);
   first.set_audio_out_stream_active(false);
   assert(!bit(first.state()[0], 1));
   assert(!bit(first.state()[kPowerSaveOffset], 7));
   assert(!bit(first.state()[kImprovedRumbleOffset], 2));
   assert(!bit(first.state()[kPowerSaveOffset], 2));
-  first.set_haptic_output_override(false);
+  first.set_native_haptics_active(false);
   assert(!bit(first.state()[0], 1));
   assert(bit(first.state()[kImprovedRumbleOffset], 2));
   assert(bit(first.state()[kPowerSaveOffset], 2));
@@ -104,7 +104,7 @@ int main() {
   // Arbitration belongs to one controller/output-state instance only.
   vds::DsOutputState second;
   assert(second.apply_usb_output_report(host_report));
-  first.set_haptic_output_override(true);
+  first.set_native_haptics_active(true);
   assert(!bit(first.state()[0], 1));
   assert(bit(second.state()[0], 1));
   assert(bit(second.state()[kPowerSaveOffset], 7));

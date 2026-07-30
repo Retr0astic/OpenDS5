@@ -152,7 +152,9 @@ public:
   DsOutputState();
 
   bool apply_usb_output_report(std::span<const std::uint8_t> report);
-  void set_haptic_output_override(bool active);
+  // Apply the effective output overlay while native haptics PCM is active.
+  // This is source activity, not controller ownership or a timed lease.
+  void set_native_haptics_active(bool active);
   void set_audio_out_stream_active(bool active, bool headset_plugged = false);
   void set_headset_mic_plugged(bool plugged);
   BtStateReport build_bt_mic_state_report(bool active, bool muted);
@@ -182,7 +184,7 @@ private:
   std::uint8_t light_brightness_ = 0;
   bool emulate_light_brightness_ = false;
   bool headset_mic_plugged_ = false;
-  bool haptic_output_override_ = false;
+  bool native_haptics_active_ = false;
   std::uint8_t report_sequence_ = 0;
   std::uint8_t mic_sequence_ = 0;
 };

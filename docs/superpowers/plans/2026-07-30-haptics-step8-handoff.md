@@ -59,20 +59,16 @@ untracked generated `result-1`, `result-2`, and `result-3` symlinks. No unrelate
 changes were reverted or overwritten. Do not commit, push, reset, clean, or
 remove generated outputs without explicit user permission.
 
-## Required next actions: Step 9
+## Step 9 continuation status
 
-1. Remove `HapticLease` and global `haptic_audio_active_` ownership from
-   `vds_protocol` and Linux/Win32 `vdsd`.
-2. Replace lease-derived behavior with explicit source/policy arbitration and
-   retain only source-specific OpenDS5 disconnect/watchdog handling.
-3. Rewrite `haptic_lease_test` and lease-era `output_state` tests around the new
-   contract.
-4. Prove app closure immediately restores pure game behavior; idle, zero, and
-   nonzero app streams must never transfer ownership.
-5. Cover policy/source/lifecycle/per-port transitions and update authoritative
-   architecture documentation.
-6. Run the full affected automated matrix, obtain an independent review, and
-   run `scripts/dev/graphify-checkpoint` at the numbered-step boundary.
+The lease-era symbols and global ownership path are now absent. The remaining
+Step 9 gate is independent review plus the full affected validation matrix.
+`DsOutputState::set_native_haptics_active` names the explicit native-haptics
+source state; it is not a timed lease and is cleared on source closure or port
+disconnect. The output-state regression tests cover idle/silent closure,
+replace-policy persistence across game-audio routing, host-state restoration,
+and per-port isolation.
 
-Step 9 must remain decision-complete before implementation begins; do not claim
-physical coexistence or controller equivalence from automated tests alone.
+Step 9 is decision-complete for the implemented source/policy arbitration;
+do not claim physical coexistence or controller equivalence from automated
+tests alone.

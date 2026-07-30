@@ -699,7 +699,7 @@ void disconnect_virtual_port(VirtualPort &port, vds::Logger &logger) {
   port.haptics_limited = false;
   port.legacy_rumble.reset();
   port.next_haptics_send_time = {};
-  port.output_state.set_haptic_output_override(false);
+  port.output_state.set_native_haptics_active(false);
   port.audio_out_stream_active = false;
   port.audio_in_stream_active = false;
   port.mic_muted = false;
@@ -2526,10 +2526,10 @@ void apply_companion_state(std::vector<VirtualPort> &ports,
       port.legacy_rumble.reset();
       if (port.haptics_policy ==
           static_cast<std::uint8_t>(vds::HapticsMixPolicy::Replace)) {
-        port.output_state.set_haptic_output_override(true);
+        port.output_state.set_native_haptics_active(true);
       } else if (!port.audio_out_stream_active &&
                  !port.opends5_haptics_queue.has_complete_block()) {
-        port.output_state.set_haptic_output_override(false);
+        port.output_state.set_native_haptics_active(false);
       }
     }
     ControllerRuntime *controller =

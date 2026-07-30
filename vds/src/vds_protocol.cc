@@ -857,11 +857,11 @@ void DsOutputState::recompute_effective_state() {
   effective_state_ = state_;
 
   // A host (notably Steam Input) may request legacy rumble and haptic
-  // mute/power-save for its own output. Keep that request in state_, but a
-  // nonzero audio-haptics chunk must be transmitted in native haptics mode.
-  // This is deliberately an effective-state overlay so the host state is
-  // restored as soon as rear-channel haptic PCM stops.
-  if (haptic_output_override_) {
+  // mute/power-save for its own output. Keep that request in state_, but an
+  // active native-haptics source must be transmitted in native haptics mode.
+  // This effective-state overlay is removed only when the source/policy
+  // arbiter reports that native haptics is no longer active.
+  if (native_haptics_active_) {
     set_state_bit(effective_state_[0], 0, false); // enable_rumble_emulation
     set_state_bit(effective_state_[0], 1, false); // use_rumble_not_haptics
     set_state_bit(effective_state_[38], 2,
@@ -948,11 +948,11 @@ void DsOutputState::recompute_effective_state() {
   }
 }
 
-void DsOutputState::set_haptic_output_override(bool active) {
-  if (haptic_output_override_ == active) {
+void DsOutputState::set_native_haptics_active(bool active) {
+  if (native_haptics_active_ == active) {
     return;
   }
-  haptic_output_override_ = active;
+  native_haptics_active_ = active;
   recompute_effective_state();
 }
 

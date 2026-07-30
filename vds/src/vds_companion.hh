@@ -51,8 +51,8 @@ struct CompanionSettings {
   // Linux-port extension (command 0x40): expose the touchpad as a desktop
   // pointer. When false the daemon grabs the touchpad evdev node.
   bool touchpad_pointer_enabled = true;
-  // 0=off, 1=mix, 2=replace. Step 5 stores/reports this additive policy only;
-  // output ownership remains the existing lease behavior until Steps 7-8.
+  // 0=off, 1=mix, 2=replace. This is an explicit source/policy decision;
+  // it never transfers controller-wide output ownership.
   std::uint8_t haptics_policy = 0;
 };
 
