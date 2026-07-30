@@ -135,7 +135,7 @@ using vds::win::win32_error_message;
 
 struct Options {
   std::string db_path = vds::kDefaultDbPath;
-  std::string log_path = vds::kDefaultLogPath;
+  std::string log_path = vds::default_log_path();
   std::string pipe = kDefaultControlPipe;
 };
 
@@ -1517,7 +1517,6 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
     std::lock_guard guard(state.mutex);
     const auto now = Clock::now();
     if (state.pending_audio_chunks.empty()) {
-      state.output_state.set_haptic_audio_active(false);
       if (!state.audio_out_stream_active || !state.audio_pcm_stream_active) {
         return kAudioFlushIdleSleep;
       }
@@ -1613,7 +1612,6 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
       const vds::AudioChunk chunk = state.pending_audio_chunks.front();
       has_signal = chunk.has_signal;
       has_haptics_signal = chunk.has_haptics_signal;
-      state.output_state.set_haptic_audio_active(has_haptics_signal);
       vds::HapticsChunk haptics = chunk.haptics;
       for (std::int8_t &sample : haptics) {
         const auto limited = static_cast<std::int8_t>(std::clamp<int>(
@@ -1658,7 +1656,6 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
       dropped_count = state.audio_dropped_count;
       pending_count = state.pending_audio_chunks.size();
       if (pending_count == 0) {
-        state.output_state.set_haptic_audio_active(false);
         restore_state_after_audio = true;
       }
       if (!sending_keepalive) {
@@ -1697,7 +1694,6 @@ Clock::duration flush_pending_audio_chunk(BluetoothTransport &bluetooth,
     pending_after_pop = state.pending_audio_chunks.size();
     if (pending_after_pop == 0) {
       state.audio_jitter_buffer_start = {};
-      state.output_state.set_haptic_audio_active(false);
       restore_state_after_audio = true;
     }
     state.last_sent_state = packet_state;

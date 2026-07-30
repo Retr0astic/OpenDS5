@@ -1,5 +1,16 @@
 # Porting plan: DS5 Bridge features on Linux via vds
 
+> **Historical reference.** This document records the original DS5 Bridge
+> Linux-porting plan and milestone history. It is retained for context, but is
+> not the authoritative description of the current system. For current
+> component boundaries and runtime ownership, start with
+> [the architecture overview](architecture/overview.md), which records the
+> accepted target architecture for the ongoing refactor. Current behavior may
+> differ until later implementation steps land. The
+> [Nix packaging](architecture/nix-packaging.md) document describes the
+> accepted target design for ongoing packaging work; see also the
+> [haptics contract](architecture/haptics.md).
+
 Goal: run the DS5 Bridge companion experience on Linux with a
 Bluetooth-connected DualSense, using vds (`vds_hcd.ko` + `vdsd`) as the
 transport instead of the Pico 2 W dongle.

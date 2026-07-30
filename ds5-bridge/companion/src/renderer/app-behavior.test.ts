@@ -131,6 +131,7 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('Physical vibration is not claimed');
     expect(appSource).toContain("['current', 'package-managed', 'symlink', 'non-regular', 'unavailable']");
     expect(appSource).toContain("'symlink', 'non-regular', 'unavailable'");
+    expect(appSource).toContain("wirePlumberRepairStatus?.status === 'unavailable' && <span>{wirePlumberRepairStatus.detail}</span>");
     expect(appSource).toContain('Protected path; replace the symlink or non-regular entry manually');
     expect(appSource).toContain('window.bridge.isLinux');
     expect(appSource).toContain('systemctl --user restart wireplumber');

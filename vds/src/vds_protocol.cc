@@ -861,7 +861,7 @@ void DsOutputState::recompute_effective_state() {
   // nonzero audio-haptics chunk must be transmitted in native haptics mode.
   // This is deliberately an effective-state overlay so the host state is
   // restored as soon as rear-channel haptic PCM stops.
-  if (haptic_audio_active_) {
+  if (haptic_output_override_) {
     set_state_bit(effective_state_[0], 0, false); // enable_rumble_emulation
     set_state_bit(effective_state_[0], 1, false); // use_rumble_not_haptics
     set_state_bit(effective_state_[38], 2,
@@ -948,11 +948,11 @@ void DsOutputState::recompute_effective_state() {
   }
 }
 
-void DsOutputState::set_haptic_audio_active(bool active) {
-  if (haptic_audio_active_ == active) {
+void DsOutputState::set_haptic_output_override(bool active) {
+  if (haptic_output_override_ == active) {
     return;
   }
-  haptic_audio_active_ = active;
+  haptic_output_override_ = active;
   recompute_effective_state();
 }
 
@@ -1109,9 +1109,9 @@ bool DsOutputState::apply_usb_output_report(
 
 void DsOutputState::set_audio_out_stream_active(bool active,
                                                 bool headset_plugged) {
-  if (!active) {
-    haptic_audio_active_ = false;
-  }
+  // Audio output routing is independent from the explicit haptics source /
+  // policy decision. In particular, stopping game audio must not release a
+  // replace-policy override that still suppresses legacy rumble.
   state_[kOutputFlag0Offset] |= kOutputFlag0AudioControlEnable;
   state_[kOutputHeadphoneVolumeOffset] = headphones_volume_;
 

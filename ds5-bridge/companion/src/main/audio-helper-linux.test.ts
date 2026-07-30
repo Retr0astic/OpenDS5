@@ -1,6 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { BRIDGE_ENDPOINT_ISSUES, channelIndices, hapticsPlaybackArgs, HapticsProcessor, nodeChannelLayout, pinnedChannelVolumes, resolveBridgeEndpoint } from '../../native/audio-helper-linux.mjs';
+import { BRIDGE_ENDPOINT_ISSUES, channelIndices, createHapticsInputWriter, hapticsClientArgs, hapticsPlaybackArgs, HapticsProcessor, nodeChannelLayout, pinnedChannelVolumes, resolveBridgeEndpoint } from '../../native/audio-helper-linux.mjs';
+
+it('drops blocked child stdin chunks, resumes after drain, and reports once', () => {
+  const writes: Buffer[] = [];
+  const diagnostics: number[] = [];
+  const stdin = { writable: true, writableNeedDrain: true, write: (chunk: Buffer) => { writes.push(chunk); return true; } };
+  const send = createHapticsInputWriter(stdin, (count) => diagnostics.push(count));
+  expect(send(Buffer.from([1]))).toBe(false);
+  expect(send(Buffer.from([2]))).toBe(false);
+  stdin.writableNeedDrain = false;
+  expect(send(Buffer.from([3]))).toBe(true);
+  expect(writes).toEqual([Buffer.from([3])]);
+  expect(diagnostics).toEqual([1]);
+});
 
 describe('audio-helper-linux exports', () => {
   it('imports without running main and exposes HapticsProcessor', () => {
@@ -9,6 +22,23 @@ describe('audio-helper-linux exports', () => {
       attack: 'balanced', release: 'balanced'
     });
     expect(typeof processor.process).toBe('function');
+  });
+
+  it('routes generated haptics through the daemon IPC client', () => {
+    expect(hapticsClientArgs([], {
+      OPENDS5_HAPTICS_SOCKET: '/tmp/vdsd-test.haptics',
+      OPENDS5_HAPTICS_PORT: '2'
+    })).toEqual([
+      '--socket', '/tmp/vdsd-test.haptics', '--port', '2',
+      '--stream-id', `${Math.max(1, process.pid >>> 0)}`
+    ]);
+    const source = readFileSync(new URL('../../native/audio-helper-linux.mjs', import.meta.url), 'utf8');
+    const renderLoopback = source.slice(
+      source.indexOf('async function runRenderLoopbackHaptics'),
+      source.indexOf('async function runPlayTestTone')
+    );
+    expect(renderLoopback).toContain("'vds-haptics-client'");
+    expect(renderLoopback).not.toContain("spawn('pw-play'");
   });
 });
 

@@ -73,9 +73,13 @@ vdsctl trace on --scope all
 vdsctl trace off --scope all
 ```
 
-You can check or attach the `vdsd` log from:
+You can check or attach the `vdsd` log from (the daemon creates parent
+directories as needed):
 
 ```text
-Linux:   /var/log/vdsd.log
+Linux root/systemd: /var/log/vdsd.log
+Linux user:         $XDG_STATE_HOME/vds/vdsd.log
+                    (or $HOME/.local/state/vds/vdsd.log when XDG_STATE_HOME is unset)
+                    (or a private temporary directory when neither is set)
 Windows: C:\ProgramData\vDS\vdsd.log
 ```

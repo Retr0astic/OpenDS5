@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <array>
+#include <chrono>
 #include <span>
 #include <vector>
 
@@ -19,6 +21,7 @@ constexpr std::size_t kHapticsStreamHeaderBytes = 32;
 constexpr std::size_t kHapticsStreamMaxPacketBytes =
     kHapticsStreamHeaderBytes +
     kHapticsStreamMaxFramesPerPacket * kHapticsStreamChannels * sizeof(float);
+constexpr std::size_t kHapticsOutputSamplesPerBoundary = 64; // 32 stereo frames @ 3 kHz
 
 struct HapticsStreamFrame {
   std::uint32_t version = kHapticsStreamVersion;
@@ -39,6 +42,7 @@ struct HapticsStreamQueueStats {
   std::uint64_t accepted = 0;
   std::uint64_t dropped = 0;
   std::uint64_t sequence_gaps = 0;
+  std::uint64_t stale = 0;
 };
 
 class HapticsStreamQueue {
@@ -60,6 +64,40 @@ private:
   HapticsStreamQueueStats stats_;
   bool have_sequence_ = false;
   std::uint64_t next_sequence_ = 0;
+  std::uint64_t last_timestamp_ns_ = 0;
+};
+
+// Fixed-capacity stereo sample FIFO used by the real-time output path.
+class HapticsSampleRing {
+ public:
+  explicit HapticsSampleRing(std::size_t capacity_frames);
+  void append(const HapticsStreamFrame& frame);
+  bool pop_block(std::span<float, kHapticsOutputSamplesPerBoundary> block);
+  bool has_complete_block() const { return size_samples_ >= kHapticsOutputSamplesPerBoundary; }
+  bool has_partial() const { return size_samples_ != 0 || accum_frames_ != 0; }
+  std::size_t size_samples() const { return size_samples_; }
+  std::size_t capacity_samples() const { return samples_.size(); }
+  std::uint64_t dropped_samples() const { return dropped_samples_; }
+  std::uint64_t stale_dropped_samples() const { return stale_dropped_samples_; }
+  // Drops an incomplete block which has remained buffered past timeout.
+  bool drop_stale(std::chrono::steady_clock::time_point now,
+                  std::chrono::milliseconds timeout);
+  void clear();
+
+ private:
+  std::vector<float> samples_;
+  std::size_t read_ = 0;
+  std::size_t write_ = 0;
+  std::size_t size_samples_ = 0;
+  std::uint64_t dropped_samples_ = 0;
+  std::uint64_t stale_dropped_samples_ = 0;
+  bool have_sequence_ = false;
+  std::uint64_t next_sequence_ = 0;
+  std::uint64_t last_timestamp_ns_ = 0;
+  std::chrono::steady_clock::time_point partial_since_{};
+  float accum_left_ = 0.0F;
+  float accum_right_ = 0.0F;
+  std::size_t accum_frames_ = 0;
 };
 
 } // namespace vds

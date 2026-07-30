@@ -86,18 +86,22 @@ build runs on every 2022-or-newer distribution.
 
 ## NixOS
 
-The default flake package is a complete userspace bundle: the Electron
-companion, `vdsd`, `vdsctl`, udev rules, WirePlumber configuration, and the
-reference systemd unit. `nix run .#opends5` reuses a compatible active
-`vdsd.service` from the same bundle or standalone vDS package without an
-authorization prompt. Otherwise it temporarily replaces the service with the
-bundled daemon, starts the companion after readiness, and restores the service
-when the app exits. That replacement path requires a host-installed,
-setuid-capable `pkexec` wrapper (`/run/wrappers/bin/pkexec` on NixOS or
-`/usr/bin/pkexec` on conventional Linux systems). The launcher also requires an
-installed `vds_hcd` kernel module exposing at least the first virtual port as
-`/dev/vds0`. A SIGKILL or power loss can bypass cleanup;
-in that case restore the service with `sudo systemctl start vdsd.service`.
+The accepted package and service ownership model is documented in the
+[Nix packaging architecture guide](architecture/nix-packaging.md). The
+instructions below describe the current user-facing flake and fallback
+workflows. Consult the target guide when composing or auditing future NixOS
+changes.
+
+The supported flake separates the GUI from the privileged vDS stack. Launch
+the default app directly with `nix run .#opends5`. It never invokes `pkexec`,
+replaces `vdsd.service`, or writes system configuration; it connects to the
+declaratively configured daemon and reports a clear error if unavailable. An
+installed `vds_hcd` module exposing `/dev/vds0` is required.
+
+The legacy privileged flow is explicit and noncanonical:
+`nix run .#opends5-portable`. It may use `pkexec` to stage a temporary daemon
+and restore the prior service; it is unsuitable for declarative NixOS and is
+not the default app.
 
 NixOS is configured declaratively, so the installer never escalates and never
 modifies the system there. The repo ships a **flake** that replaces the whole
@@ -163,10 +167,12 @@ Move both next to `configuration.nix`, add
 
 The fallback covers the kernel module only. For userspace, mirror the flake
 module by hand: create the `vds` group, add your user, install the udev rules
-(`vds-bin/99-vds-dualsense-udev.rules`) via `services.udev.extraRules`, and
-run `vdsd` as a systemd service built from the `vds/` source (the prebuilt
-Ubuntu binaries need `programs.nix-ld.enable`). Re-run the generator and
-rebuild after driver updates.
+from `vds/99-vds-dualsense-udev.rules` via `services.udev.extraRules`, and run
+`vdsd` as a systemd service built from the `vds/` source. Alternatively, expose
+the standalone vDS package through `services.udev.packages` and use its
+`<vds-package>/bin/vdsd` in the unit; the GUI package owns none of these
+artifacts. (The prebuilt Ubuntu binaries need `programs.nix-ld.enable`.)
+Re-run the generator and rebuild after driver updates.
 
 Verify either path with `lsmod | grep vds_hcd` and `ls /dev/vds*` after the
 rebuild (reboot if the kernel changed).

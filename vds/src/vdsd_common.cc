@@ -20,7 +20,7 @@ namespace vds {
 VdsdCommonOptions default_vdsd_common_options() {
   return VdsdCommonOptions{
       .db_path = kDefaultDbPath,
-      .log_path = kDefaultLogPath,
+      .log_path = default_log_path(),
       .help_requested = false,
   };
 }
@@ -36,7 +36,7 @@ std::string vdsd_usage(std::string_view version, std::string_view build_year,
           "  vdsd [--db-path ";
   text += kDefaultDbPath;
   text += "] [--log ";
-  text += kDefaultLogPath;
+  text += default_log_path();
   text += "]";
   if (!platform_options.empty()) {
     text += " ";

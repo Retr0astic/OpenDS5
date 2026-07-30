@@ -11,7 +11,7 @@ describe('WirePlumber managed config', () => {
   it('distinguishes current, legacy, modified and missing files', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'opends5-wp-'));
     const file = path.join(dir, '99-vds.conf');
-    expect(inspectWirePlumberConfig(file, 'current').status).toBe('missing');
+    expect(inspectWirePlumberConfig(file, 'current', { managedPaths: [] }).status).toBe('missing');
     writeFileSync(file, 'alsa_card.usb-Sony_Interactive_Entertainment_DualSense.*');
     expect(inspectWirePlumberConfig(file, 'current').status).toBe('known-legacy');
     writeFileSync(file, 'other');
@@ -102,7 +102,7 @@ describe('WirePlumber managed config', () => {
     const docs = path.join(root, 'docs');
     mkdirSync(path.join(docs, 'vds', 'examples'), { recursive: true });
     writeFileSync(path.join(docs, 'vds', 'examples', '99-vds-dualsense-wireplumber.conf'), configSource);
-    expect(inspectWirePlumberConfig(path.join(root, 'other', 'wireplumber.conf'), configSource, { configDirs: [], dataDirs: [docs] }).status).toBe('missing');
+    expect(inspectWirePlumberConfig(path.join(root, 'other', 'wireplumber.conf'), configSource, { managedPaths: [] }).status).toBe('missing');
   });
 
   it('matches only the OpenDS5 virtual identity and preserves Proton-facing names', () => {

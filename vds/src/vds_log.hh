@@ -15,6 +15,11 @@ inline constexpr const char *kDefaultLogPath = R"(C:\ProgramData\vDS\vdsd.log)";
 inline constexpr const char *kDefaultLogPath = "/var/log/vdsd.log";
 #endif
 
+// Select the startup default without changing the explicit --log override.
+// System/root operation retains the historical systemd path; ordinary users
+// are redirected to their XDG state directory.
+std::string default_log_path();
+
 enum class LogLevel {
   Debug,
   Info,

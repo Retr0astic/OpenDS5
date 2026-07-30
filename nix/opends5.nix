@@ -15,13 +15,26 @@ buildNpmPackage {
   pname = "opends5";
   inherit version;
 
-  src = ../.;
+  # Keep the companion tree while including only its shared controller/glyph
+  # assets required by renderer imports and package metadata.
+  src = lib.cleanSourceWith {
+    src = ../.;
+    filter = path: type:
+      let
+        rel = lib.removePrefix (toString ../.) (toString path);
+      in
+        rel == "/ds5-bridge"
+        || rel == "/ds5-bridge/assets"
+        || lib.hasPrefix "/ds5-bridge/assets/" rel
+        || rel == "/ds5-bridge/companion"
+        || lib.hasPrefix "/ds5-bridge/companion/" rel;
+  };
 
-  npmDepsHash = "sha256-IVC+TbdnelQEZ376xXLloAaOrU1oaxKpFCzhPYaUMnk=";
+  npmDepsHash = "sha256-fs26+WmbKvSNUruvQ/dpDJpVv2NZ+5IMOoBKW+KScV8=";
 
   postPatch = ''
-    cp ds5-bridge/companion/package-lock.json ./package-lock.json
     cp ds5-bridge/companion/package.json ./package.json
+    cp ds5-bridge/companion/package-lock.json ./package-lock.json
   '';
 
   env = {
@@ -50,25 +63,12 @@ buildNpmPackage {
   installPhase = ''
     runHook preInstall
 
-    companion="$PWD/ds5-bridge/companion"
-
     mkdir -p "$out/bin"
     mkdir -p "$out/share/opends5"
     mkdir -p "$out/share/opends5/node_modules"
     mkdir -p "$out/share/opends5/native"
-    mkdir -p "$out/share/opends5/vds-bin"
 
-    ln -s ${vds}/bin/vdsd "$out/bin/vdsd"
-    ln -s ${vds}/bin/vdsctl "$out/bin/vdsctl"
-    mkdir -p "$out/lib/udev/rules.d" "$out/lib/systemd/system" \
-      "$out/share/wireplumber/wireplumber.conf.d"
-    ln -s ${vds}/lib/udev/rules.d/99-vds-dualsense.rules \
-      "$out/lib/udev/rules.d/99-vds-dualsense.rules"
-    ln -s ${vds}/lib/systemd/system/vdsd.service \
-      "$out/lib/systemd/system/vdsd.service"
-    ln -s ${vds}/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf \
-      "$out/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf"
-
+    companion="$PWD/ds5-bridge/companion"
     cp -r "$companion/dist" \
       "$out/share/opends5/dist"
 
@@ -87,20 +87,9 @@ buildNpmPackage {
     cp "$companion/src/renderer/assets/test-speaker-tone-silence-tail.mp3" \
       "$out/share/opends5/native/test-speaker-tone-silence-tail.mp3"
 
-    ln -s "$out/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf" \
-      "$out/share/opends5/vds-bin/99-vds-dualsense-wireplumber.conf"
-    ln -s "$out/lib/udev/rules.d/99-vds-dualsense.rules" \
-      "$out/share/opends5/vds-bin/99-vds-dualsense-udev.rules"
-    ln -s "$out/lib/systemd/system/vdsd.service" \
-      "$out/share/opends5/vds-bin/vdsd.service"
-    ln -s "$out/bin/vdsd" "$out/share/opends5/vds-bin/vdsd"
-    ln -s "$out/bin/vdsctl" "$out/share/opends5/vds-bin/vdsctl"
-
     makeWrapper ${electron_42}/bin/electron "$out/bin/opends5" \
       --set-default OPENDS5_APP_ROOT \
         "$out/share/opends5" \
-      --set-default OPENDS5_WIREPLUMBER_CONFIG \
-        "$out/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf" \
       --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath [
       libusb1
       stdenv.cc.cc.lib
@@ -108,6 +97,7 @@ buildNpmPackage {
     ]}" \
       --prefix PATH : "${lib.makeBinPath [
       pipewire
+      vds
     ]}" \
       --add-flags "$out/share/opends5"
 

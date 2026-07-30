@@ -124,6 +124,8 @@ describe('IPC contract', () => {
     expect(mainSource).toContain("if (process.platform !== 'linux') return { status: 'unavailable'");
     expect(mainSource).toContain("if (process.platform !== 'linux') throw new Error('WirePlumber repair is available on Linux only.')");
     expect(preloadSource).toContain("isLinux: process.platform === 'linux'");
+    expect(mainSource).toContain("status: 'unavailable',\n        path: '',\n        detail: 'OpenDS5 WirePlumber config is unavailable in this build");
+    expect(mainSource).toContain('install the vDS package or set OPENDS5_WIREPLUMBER_CONFIG before repairing.');
   });
 
   it('exposes trigger profile engine channels', () => {

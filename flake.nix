@@ -40,7 +40,7 @@
 
         opends5 = pkgs.callPackage ./nix/opends5.nix {
           inherit version;
-          inherit vds;
+          vds = vds;
         };
 
         vds-module = pkgs.callPackage ./nix/vds-module.nix {
@@ -64,8 +64,8 @@
             --replace-fail @FLOCK@ ${pkgs.util-linux}/bin/flock \
             --replace-fail @SYSTEMCTL@ ${pkgs.systemd}/bin/systemctl \
             --replace-fail @MODPROBE@ ${pkgs.kmod}/bin/modprobe \
-            --replace-fail @VDSD@ ${bundle}/bin/vdsd \
-            --replace-fail @VDSCTL@ ${bundle}/bin/vdsctl \
+            --replace-fail @VDSD@ ${self.packages.${pkgs.stdenv.hostPlatform.system}.vds}/bin/vdsd \
+            --replace-fail @VDSCTL@ ${self.packages.${pkgs.stdenv.hostPlatform.system}.vds}/bin/vdsctl \
             --replace-fail @SLEEP@ ${pkgs.coreutils}/bin/sleep
           chmod 0555 $out
         '';
@@ -74,9 +74,9 @@
           substitute ${./nix/run-opends5.sh} $out/bin/opends5-run \
             --replace-fail @SAFE_PATH@ ${pkgs.lib.makeBinPath [ pkgs.coreutils pkgs.gnugrep ]} \
             --replace-fail @SYSTEMCTL@ ${pkgs.systemd}/bin/systemctl \
-            --replace-fail @BUNDLE_VDSD@ ${bundle}/bin/vdsd \
+            --replace-fail @BUNDLE_VDSD@ ${self.packages.${pkgs.stdenv.hostPlatform.system}.vds}/bin/vdsd \
             --replace-fail @STANDALONE_VDSD@ ${self.packages.${pkgs.stdenv.hostPlatform.system}.vds}/bin/vdsd \
-            --replace-fail @VDSCTL@ ${bundle}/bin/vdsctl \
+            --replace-fail @VDSCTL@ ${self.packages.${pkgs.stdenv.hostPlatform.system}.vds}/bin/vdsctl \
             --replace-fail @NIXOS_PKEXEC@ /run/wrappers/bin/pkexec \
             --replace-fail @USR_PKEXEC@ /usr/bin/pkexec \
             --replace-fail @MKTEMP@ ${pkgs.coreutils}/bin/mktemp \
@@ -90,10 +90,15 @@
           chmod 0555 $out/bin/opends5-run
         '';
       in {
-        opends5 = {
+        opends5-portable = {
           type = "app";
           program = "${launcher}/bin/opends5-run";
           meta.description = "Run OpenDS5 with its bundled temporary vdsd daemon";
+        };
+        opends5 = {
+          type = "app";
+          program = "${bundle}/bin/opends5";
+          meta.description = "Run the OpenDS5 GUI against the configured system daemon";
         };
         default = self.apps.${pkgs.stdenv.hostPlatform.system}.opends5;
       }
@@ -102,6 +107,7 @@
     checks = forAllSystems (
       pkgs: let
         bundle = self.packages.${pkgs.stdenv.hostPlatform.system}.opends5;
+        vds = self.packages.${pkgs.stdenv.hostPlatform.system}.vds;
         customCompanion = pkgs.runCommand "custom-companion" { } "mkdir -p $out/bin";
         customVds = pkgs.runCommand "custom-vds" { } "mkdir -p $out/bin $out/share/wireplumber/wireplumber.conf.d";
         evalModule = extra: (nixpkgs.lib.nixosSystem {
@@ -117,11 +123,14 @@
       in {
         bundle-layout = pkgs.runCommand "opends5-bundle-layout" { } ''
           test -x ${bundle}/bin/opends5
-          test -x ${bundle}/bin/vdsd
-          test -x ${bundle}/bin/vdsctl
-          test -e ${bundle}/lib/udev/rules.d/99-vds-dualsense.rules
-          test -e ${bundle}/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf
-          test -e ${bundle}/lib/systemd/system/vdsd.service
+          test ! -e ${bundle}/bin/vdsd
+          test ! -e ${bundle}/bin/vdsctl
+          test ! -e ${bundle}/lib/udev
+          test ! -e ${bundle}/lib/systemd
+          test ! -e ${bundle}/share/wireplumber
+          test -e ${bundle}/share/opends5/native/audio-helper-linux.mjs
+          test -e ${bundle}/share/opends5/node_modules/node-hid
+          test "$(sed -n 's/.*\"electron\": \"\^\([0-9]*\).*/\1/p' ${bundle}/share/opends5/package.json)" = 42
           touch $out
         '';
         launcher-lifecycle = pkgs.runCommand "opends5-launcher-lifecycle" { } ''
@@ -132,9 +141,18 @@
           test -x ${self.apps.${pkgs.stdenv.hostPlatform.system}.opends5.program}
           touch $out
         '';
+        electron-native-smoke = pkgs.runCommand "opends5-electron-native-smoke" { } ''
+          electron="$(awk '/^exec / { print $2; exit }' ${bundle}/bin/opends5 | tr -d '"')"
+          version="$($electron --version)"
+          case "$version" in v42.*) ;; *) exit 1 ;; esac
+          ${pkgs.nodejs}/bin/node -e "require('${bundle}/share/opends5/node_modules/node-hid')"
+          touch $out
+        '';
         module-package-policy = pkgs.runCommand "opends5-module-package-policy" { } ''
-          test '${defaultEval.systemd.services.vdsd.serviceConfig.ExecStart}' = '${bundle}/bin/vdsd'
-          test '${packageOnlyEval.systemd.services.vdsd.serviceConfig.ExecStart}' = '${self.packages.${pkgs.stdenv.hostPlatform.system}.vds}/bin/vdsd'
+          test '${defaultEval.systemd.services.vdsd.serviceConfig.ExecStart}' = '${vds}/bin/vdsd'
+          test '${builtins.head defaultEval.services.udev.packages}' = '${vds}'
+          test '${defaultEval.environment.etc."wireplumber/wireplumber.conf.d/99-vds-dualsense.conf".source}' = '${vds}/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf'
+          test '${packageOnlyEval.systemd.services.vdsd.serviceConfig.ExecStart}' = '${vds}/bin/vdsd'
           test '${explicitEval.systemd.services.vdsd.serviceConfig.ExecStart}' = '${customVds}/bin/vdsd'
           touch $out
         '';

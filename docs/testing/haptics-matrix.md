@@ -4,10 +4,21 @@
 
 Step 5 coverage verifies persisted `enabled + mode` decoding to explicit
 `off`/`mix`/`replace`, legacy wire serialization, and
-`vdsctl haptics-status --json` control output. Policy is persisted/observable
-only; it does not change output ownership. Mix/replace arbitration and the
-source matrix below are future Steps 7-8. Dedicated OpenDS5 PCM, underrun, and
-limiting fields remain false/zero until those steps add their owners.
+`vdsctl haptics-status --json` control output. Source/policy arbitration is
+explicit per output-state instance: `replace` suppresses compatible game
+rumble, while source closure restores game state immediately. Game audio-out
+stop is routing-only and cannot clear a policy-derived override. Step 7 has
+focused source/policy arbitration tests, including the deterministic
+replace-to-audio-out-stop regression. The source matrix below is covered by
+the mixer and legacy-rumble unit tests. Step 6 has focused framing/queue and
+process-spawn unit coverage for dedicated OpenDS5 IPC negotiation, peer
+authorization, malformed packets, bounded overflow, and actuator extraction.
+Step 6 now exercises the production-backed Linux haptics client registry for
+bounded pending-client admission, negotiation expiry, one owner per port,
+disconnect cleanup, and reload owner removal. Physical Bluetooth/controller
+integration remains unvalidated until Step 7 hardware tests.
+Underrun and
+limiting fields remain zero until Step 7 adds their owners.
 
 For every policy test:
 
@@ -22,7 +33,10 @@ For every policy test:
 | on | on | off |
 | on | on | on |
 
-Future source/arbitration expectations for Steps 7-8:
+Automated source/arbitration coverage includes source/policy combinations, independent
+gains, one-step limiting and int8 quantization, stale/short app frames,
+speaker/headphone preservation, and per-port isolation. Hardware timing and
+controller feel remain unvalidated here.
 
 ### Off
 
@@ -47,7 +61,9 @@ Future source/arbitration expectations for Steps 7-8:
 
 ## Lifecycle tests
 
-- App helper closes normally.
+- App helper closes normally; source closure immediately restores game state
+  (unit/process coverage only; full daemon lifecycle integration remains
+  pending).
 - App helper crashes.
 - Data socket disconnects.
 - Control socket disconnects.
@@ -57,15 +73,17 @@ Future source/arbitration expectations for Steps 7-8:
 - Policy changes mid-stream.
 - Game begins/stops native PCM.
 - Game changes legacy motor values.
-- Idle connected app stream.
+- Idle connected app stream (no timeout-based ownership change).
 - Queue overrun.
 - Queue underrun.
-- Two ports active with different policies.
+- Two ports active with different policies (not yet hardware validated).
 - Malformed and wrong-version frames.
 
 ## Nix integration tests
 
 - GUI package has no daemon/system artifacts.
+- Electron/native startup smoke launches the packaged Electron runtime with
+  `--version` and loads the bundled `node-hid` native module in isolation.
 - Daemon package contains expected assets.
 - Kernel package matches configured kernel.
 - NixOS module creates service and permissions.

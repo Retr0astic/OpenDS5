@@ -52,6 +52,10 @@
 #include "vds_udev.hh"
 #include "vds_companion.hh"
 #include "vdsd_common.hh"
+#include "haptics_stream_endpoint.hh"
+#include "haptics_mixer.hh"
+#include "legacy_rumble.hh"
+#include "platform/linux/haptics_client_registry.hh"
 
 namespace {
 
@@ -77,6 +81,10 @@ constexpr std::uint64_t kInputTraceSummaryInterval = 1000;
 constexpr std::uint64_t kOutputTraceSummaryInterval = 250;
 constexpr int kMaxPortFramesPerWake = 64;
 constexpr int kMaxBtPacketsPerWake = 64;
+constexpr int kMaxHapticsPacketsPerWake = 64;
+constexpr std::size_t kMaxHapticsClients = 16;
+constexpr auto kHapticsNegotiationTimeout = std::chrono::seconds(2);
+constexpr auto kHapticsPartialTimeout = std::chrono::milliseconds(50);
 constexpr int kPendingOutputPollMs = 2;
 constexpr auto kInputTraceGapWarn = std::chrono::milliseconds(20);
 constexpr auto kInputTraceSlowWriteWarn = std::chrono::milliseconds(5);
@@ -116,7 +124,7 @@ volatile sig_atomic_t g_log_reopen_requested = 0;
 
 struct Options {
   std::string socket = kDefaultControlSocket;
-  std::string log_path = vds::kDefaultLogPath;
+  std::string log_path = vds::default_log_path();
   std::string db_path = vds::kDefaultDbPath;
 };
 
@@ -131,6 +139,8 @@ struct TraceState {
   std::uint64_t dropped_usb_frame_count = 0;
   std::uint64_t dropped_audio_haptics_count = 0;
   std::uint64_t queue_dropped_audio_haptics_count = 0;
+  std::uint64_t opends5_ring_drop_count = 0;
+  std::uint64_t opends5_underrun_count = 0;
   std::uint64_t stale_audio_haptics_count = 0;
   std::uint64_t blocked_audio_haptics_count = 0;
   std::uint64_t deferred_bt_state_count = 0;
@@ -178,13 +188,18 @@ struct VirtualPort {
   vds::PcmAudioExtractor waveout_extractor;
   vds::MicAudioDecoder mic_decoder;
   vds::HapticsPacketBuilder haptics_builder;
+  vds::LegacyRumbleState legacy_rumble;
   vds::DsOutputState output_state;
   std::deque<vds::AudioChunk> pending_audio_chunks;
+  vds::HapticsSampleRing opends5_haptics_queue{8 * vds::kHapticsStreamMaxFramesPerPacket};
+  bool opends5_haptics_connected = false;
+  std::uint32_t opends5_haptics_peak_left = 0;
+  std::uint32_t opends5_haptics_peak_right = 0;
+  bool haptics_limited = false;
   std::optional<vds::DsState> last_sent_bt_state;
   std::optional<vds::DsState> pending_bt_state;
   std::optional<vds::BtStateReport> pending_bt_state_report;
   Clock::time_point next_haptics_send_time{};
-  vds::HapticLease haptic_lease;
   bool audio_out_stream_active = false;
   bool audio_in_stream_active = false;
   bool mic_muted = false;
@@ -195,6 +210,7 @@ struct VirtualPort {
   bool speaker_waveout_active = false;
   std::uint32_t speaker_waveout_phase = 0;
   std::uint16_t haptics_gain_percent = 100;
+  std::uint16_t opends5_haptics_gain_percent = 100;
   std::uint8_t haptics_policy = 0;
   // Speaker/haptics queue depth in 10 ms chunks, from the companion
   // SET_HAPTICS_BUFFER_LENGTH setting; defaults match the old constants.
@@ -227,7 +243,18 @@ enum class EventType : std::uint32_t {
   BtAcceptControl = 5,
   BtAcceptInterrupt = 6,
   Udev = 7,
+  HapticsAccept = 8,
+  HapticsClient = 9,
 };
+
+struct HapticsClient {
+  vds::UniqueFd fd;
+  vds::HapticsClientRegistry::Token token = 0;
+  Clock::time_point accepted_at = Clock::now();
+  std::optional<vds::HapticsStreamNegotiation> negotiation;
+  std::optional<std::size_t> port_index;
+};
+vds::HapticsClientRegistry *g_haptics_registry = nullptr;
 
 struct EventSource {
   EventType type;
@@ -631,13 +658,18 @@ void reset_virtual_port(VirtualPort &port) {
   port.waveout_extractor = vds::PcmAudioExtractor{};
   port.mic_decoder = vds::MicAudioDecoder{};
   port.haptics_builder = vds::HapticsPacketBuilder{};
+  port.legacy_rumble.reset();
   port.output_state = vds::DsOutputState{};
   port.pending_audio_chunks.clear();
+  port.opends5_haptics_queue.clear();
+  port.opends5_haptics_connected = false;
+  port.opends5_haptics_peak_left = 0;
+  port.opends5_haptics_peak_right = 0;
+  port.haptics_limited = false;
   port.last_sent_bt_state.reset();
   port.pending_bt_state.reset();
   port.pending_bt_state_report.reset();
   port.next_haptics_send_time = {};
-  port.haptic_lease.clear();
   port.audio_out_stream_active = false;
   port.audio_in_stream_active = false;
   port.mic_muted = false;
@@ -660,9 +692,14 @@ void reset_virtual_port(VirtualPort &port) {
 
 void disconnect_virtual_port(VirtualPort &port, vds::Logger &logger) {
   port.pending_audio_chunks.clear();
+  port.opends5_haptics_queue.clear();
+  port.opends5_haptics_connected = false;
+  port.opends5_haptics_peak_left = 0;
+  port.opends5_haptics_peak_right = 0;
+  port.haptics_limited = false;
+  port.legacy_rumble.reset();
   port.next_haptics_send_time = {};
-  port.haptic_lease.clear();
-  port.output_state.set_haptic_audio_active(false);
+  port.output_state.set_haptic_output_override(false);
   port.audio_out_stream_active = false;
   port.audio_in_stream_active = false;
   port.mic_muted = false;
@@ -709,7 +746,6 @@ void handle_frame(const vds_frame_header &header,
       if (!port.audio_out_stream_active) {
         port.pending_audio_chunks.clear();
         port.extractor = vds::PcmAudioExtractor{};
-        port.haptic_lease.clear();
         port.output_state.set_audio_out_stream_active(false,
                                                       port.headset_plugged);
       } else {
@@ -1563,7 +1599,6 @@ void sync_virtual_ports(std::vector<VirtualPort> &ports,
         .pending_bt_state = std::nullopt,
         .pending_bt_state_report = std::nullopt,
         .next_haptics_send_time = {},
-        .haptic_lease = {},
         .speaker_waveout_selected = true,
         .speaker_waveout_active = false,
         .speaker_waveout_phase = 0,
@@ -1764,6 +1799,8 @@ bool has_pending_bt_output(std::span<const VirtualPort> ports,
     const auto port_index = find_port_index(ports, controller.device);
     if (port_index && (ports[*port_index].pending_bt_state_report ||
                        !ports[*port_index].pending_audio_chunks.empty() ||
+                       (ports[*port_index].haptics_policy != 0 &&
+                       ports[*port_index].opends5_haptics_queue.has_complete_block()) ||
                        ports[*port_index].speaker_waveout_active)) {
       return true;
     }
@@ -1787,15 +1824,15 @@ int next_wakeup_timeout_ms(std::span<const VirtualPort> ports,
       continue;
     }
 
-    const auto lease_deadline = ports[*port_index].haptic_lease.deadline();
-    if (ports[*port_index].haptic_lease.active()) {
-      if (lease_deadline <= now) return 0;
-      const auto lease_wait =
-          std::chrono::ceil<std::chrono::milliseconds>(lease_deadline - now);
-      timeout_ms = std::min(timeout_ms, static_cast<int>(lease_wait.count()));
-    }
 
-    if (ports[*port_index].pending_audio_chunks.empty()) continue;
+    if (ports[*port_index].pending_audio_chunks.empty() &&
+        !ports[*port_index].opends5_haptics_queue.has_complete_block()) {
+      if (ports[*port_index].opends5_haptics_queue.has_partial()) {
+        timeout_ms = std::min(timeout_ms,
+                              static_cast<int>(kHapticsPartialTimeout.count()));
+      }
+      continue;
+    }
 
     const auto next_time = ports[*port_index].next_haptics_send_time;
     if (next_time == Clock::time_point{} || next_time <= now) {
@@ -1812,14 +1849,13 @@ bool flush_pending_audio_chunk(VirtualPort &port,
                                vds::BtL2capBackend &bt_backend,
                                std::uint32_t trace_flags, vds::Logger &logger) {
   const auto now = Clock::now();
-  if (port.haptic_lease.expire(now)) {
-    port.output_state.set_haptic_audio_active(false);
-    refresh_pending_bt_state(port);
-    forward_bt_state_if_changed(port, bt_backend, trace_flags, logger,
-                                "haptic lease expired");
+  if (port.opends5_haptics_queue.drop_stale(now, kHapticsPartialTimeout)) {
+    ++port.trace_state.stale_audio_haptics_count;
   }
 
-  if (port.pending_audio_chunks.empty()) {
+  const bool app_complete = port.haptics_policy != 0 &&
+                            port.opends5_haptics_queue.has_complete_block();
+  if (port.pending_audio_chunks.empty() && !app_complete) {
     return true;
   }
 
@@ -1851,20 +1887,42 @@ bool flush_pending_audio_chunk(VirtualPort &port,
             std::to_string(port.trace_state.blocked_audio_haptics_count));
   }
 
-  const auto &chunk = port.pending_audio_chunks.front();
-  if (chunk.has_haptics_signal) {
-    port.haptic_lease.activate(now);
-    port.output_state.set_haptic_audio_active(true);
-    refresh_pending_bt_state(port);
+  vds::AudioChunk chunk{};
+  const bool have_game_pcm = !port.pending_audio_chunks.empty();
+  if (!port.pending_audio_chunks.empty()) {
+    chunk = port.pending_audio_chunks.front();
   }
-  vds::HapticsChunk haptics = chunk.haptics;
-  if (port.haptics_gain_percent != 100) {
-    for (auto &sample : haptics) {
-      const int scaled =
-          static_cast<int>(sample) * port.haptics_gain_percent / 100;
-      sample = static_cast<std::int8_t>(std::clamp(scaled, -128, 127));
-    }
+  std::array<float, vds::kHapticsOutputSamplesPerBoundary> app_samples{};
+  const bool have_app = port.haptics_policy != 0 &&
+                        port.opends5_haptics_queue.pop_block(app_samples);
+  // Compatible rumble remains native when it is the only source. Once a PCM
+  // boundary is being emitted, preserve the motor state by adding a bounded,
+  // smoothed synthetic actuator signal. Replace is the sole explicit
+  // suppression policy.
+  const auto policy = static_cast<vds::HapticsMixPolicy>(port.haptics_policy);
+  std::array<float, vds::kHapticsSampleSize> game_samples{};
+  for (std::size_t i = 0; i < chunk.haptics.size(); ++i)
+    game_samples[i] = static_cast<float>(chunk.haptics[i]) / 127.0F;
+  const bool legacy_active = port.output_state.legacy_rumble_left() != 0 ||
+                             port.output_state.legacy_rumble_right() != 0;
+  port.legacy_rumble.set_policy(policy);
+  port.legacy_rumble.update(port.output_state.legacy_rumble_left(),
+                            port.output_state.legacy_rumble_right(),
+                            have_game_pcm, have_app);
+  if (port.legacy_rumble.mode() == vds::HapticsPhysicalMode::Pcm &&
+      policy != vds::HapticsMixPolicy::Replace) {
+    const auto legacy = port.legacy_rumble.render_pcm();
+    for (std::size_t i = 0; i < game_samples.size(); ++i)
+      game_samples[i] += legacy[i];
   }
+  const auto mixed = vds::mix_haptics_boundary(
+      std::span<const float, vds::kHapticsSampleSize>(game_samples),
+      have_app ? std::span<const float>(app_samples) : std::span<const float>{},
+      policy,
+      static_cast<float>(port.haptics_gain_percent) / 100.0F,
+      static_cast<float>(port.opends5_haptics_gain_percent) / 100.0F);
+  port.haptics_limited = mixed.limiting;
+  const auto &haptics = mixed.haptics;
   const auto packet = port.haptics_builder.build_packet(
       haptics, chunk.speaker, port.output_state.state(), true,
       port.headset_plugged);
@@ -1872,7 +1930,7 @@ bool flush_pending_audio_chunk(VirtualPort &port,
   if (!bt_backend.try_send_output_report(packet)) {
     ++port.trace_state.dropped_audio_haptics_count;
     ++port.trace_state.blocked_audio_haptics_count;
-    port.pending_audio_chunks.pop_front();
+    if (!port.pending_audio_chunks.empty()) port.pending_audio_chunks.pop_front();
     port.next_haptics_send_time = Clock::now() + kHapticsOutputBlockedRetry;
     if (port.trace_state.blocked_audio_haptics_count == 1 ||
         port.trace_state.blocked_audio_haptics_count % 1000 == 0) {
@@ -1895,7 +1953,7 @@ bool flush_pending_audio_chunk(VirtualPort &port,
 
   const auto send_duration = Clock::now() - send_start;
   const vds::DsState sent_state = port.output_state.state();
-  port.pending_audio_chunks.pop_front();
+  if (!port.pending_audio_chunks.empty()) port.pending_audio_chunks.pop_front();
   port.last_sent_bt_state = sent_state;
   if (port.pending_bt_state &&
       *port.pending_bt_state == *port.last_sent_bt_state) {
@@ -2284,25 +2342,42 @@ void handle_control_client(int control_fd, std::span<VirtualPort> ports,
         .nonzero_haptics_chunk_count =
             port.trace_state.nonzero_haptics_chunk_count,
         .bt_0x36_sent_count = port.trace_state.bt_0x36_sent_count,
-        .queue_drop_count =
-            port.trace_state.queue_dropped_audio_haptics_count,
-        .stale_drop_count = port.trace_state.stale_audio_haptics_count,
+        .queue_drop_count = port.trace_state.queue_dropped_audio_haptics_count +
+                            port.trace_state.opends5_ring_drop_count /
+                                vds::kHapticsStreamChannels,
+        .stale_drop_count = port.trace_state.stale_audio_haptics_count +
+                            port.opends5_haptics_queue.stale_dropped_samples() /
+                                vds::kHapticsStreamChannels,
         .blocked_drop_count = port.trace_state.blocked_audio_haptics_count,
-        .pending_queue_depth =
-            static_cast<std::uint64_t>(port.pending_audio_chunks.size()),
+        .pending_queue_depth = static_cast<std::uint64_t>(
+            port.pending_audio_chunks.size() +
+                port.opends5_haptics_queue.size_samples() /
+                    vds::kHapticsOutputSamplesPerBoundary),
         .max_pending_queue_depth = port.trace_state.max_pending_queue_depth,
         .haptics_policy = vds::haptics_policy_name(port.haptics_policy),
         .game_pcm_active = port.audio_out_stream_active,
         .game_legacy_motor_left = port.output_state.legacy_rumble_left(),
         .game_legacy_motor_right = port.output_state.legacy_rumble_right(),
-        .opends5_pcm_active = false,
-        .effective_physical_mode = port.haptic_lease.active() ? "native-audio" : "legacy-rumble",
+        .opends5_pcm_active = port.opends5_haptics_connected &&
+                              port.opends5_haptics_queue.has_complete_block(),
+        .effective_physical_mode = [&] {
+          const auto mode = port.legacy_rumble.mode_for(
+              port.output_state.legacy_rumble_left(),
+              port.output_state.legacy_rumble_right(),
+              port.audio_out_stream_active,
+              port.opends5_haptics_connected &&
+                  port.opends5_haptics_queue.has_complete_block());
+          if (mode == vds::HapticsPhysicalMode::Pcm) return "native-audio";
+          if (mode == vds::HapticsPhysicalMode::LegacyRumble)
+            return "legacy-rumble";
+          return "silent";
+        }(),
         .game_pcm_peak_left = port.trace_state.game_pcm_peak_left,
         .game_pcm_peak_right = port.trace_state.game_pcm_peak_right,
-        .opends5_pcm_peak_left = 0,
-        .opends5_pcm_peak_right = 0,
-        .underrun_count = 0,
-        .limiting = false,
+        .opends5_pcm_peak_left = port.opends5_haptics_peak_left,
+        .opends5_pcm_peak_right = port.opends5_haptics_peak_right,
+        .underrun_count = port.trace_state.opends5_underrun_count,
+        .limiting = port.haptics_limited,
     });
   }
 
@@ -2443,7 +2518,20 @@ void apply_companion_state(std::vector<VirtualPort> &ports,
   }
 
   for (auto &port : ports) {
+    const auto previous_policy = port.haptics_policy;
     port.haptics_policy = settings.haptics_policy;
+    port.legacy_rumble.set_policy(
+        static_cast<vds::HapticsMixPolicy>(port.haptics_policy));
+    if (previous_policy != port.haptics_policy) {
+      port.legacy_rumble.reset();
+      if (port.haptics_policy ==
+          static_cast<std::uint8_t>(vds::HapticsMixPolicy::Replace)) {
+        port.output_state.set_haptic_output_override(true);
+      } else if (!port.audio_out_stream_active &&
+                 !port.opends5_haptics_queue.has_complete_block()) {
+        port.output_state.set_haptic_output_override(false);
+      }
+    }
     ControllerRuntime *controller =
         controller_for_port(controllers, port.path);
     if (controller == nullptr || !controller->backend ||
@@ -2510,9 +2598,11 @@ void add_epoll_fd(int epoll_fd, int fd, EventType type, std::size_t index) {
 }
 
 vds::UniqueFd rebuild_epoll(int control_fd, vds::BtL2capAcceptor &bt_acceptor,
+                            const vds::HapticsStreamEndpoint &haptics_endpoint,
                             const vds::VdsDeviceMonitor &vds_monitor,
                             std::span<VirtualPort> ports,
-                            std::span<ControllerRuntime> controllers) {
+                            std::span<ControllerRuntime> controllers,
+                            std::span<HapticsClient> haptics_clients) {
   vds::UniqueFd epoll_fd(::epoll_create1(EPOLL_CLOEXEC));
   if (!epoll_fd) {
     throw std::runtime_error("epoll_create1 failed: " +
@@ -2520,6 +2610,8 @@ vds::UniqueFd rebuild_epoll(int control_fd, vds::BtL2capAcceptor &bt_acceptor,
   }
 
   add_epoll_fd(epoll_fd.get(), control_fd, EventType::Control, 0);
+  add_epoll_fd(epoll_fd.get(), haptics_endpoint.listener_fd(),
+               EventType::HapticsAccept, 0);
   add_epoll_fd(epoll_fd.get(), vds_monitor.fd(), EventType::Udev, 0);
   add_epoll_fd(epoll_fd.get(), bt_acceptor.control_listener_fd(),
                EventType::BtAcceptControl, 0);
@@ -2537,6 +2629,10 @@ vds::UniqueFd rebuild_epoll(int control_fd, vds::BtL2capAcceptor &bt_acceptor,
     add_epoll_fd(epoll_fd.get(), controllers[i].backend->interrupt_fd(),
                  EventType::BtInterrupt, i);
   }
+  for (std::size_t i = 0; i < haptics_clients.size(); ++i) {
+    add_epoll_fd(epoll_fd.get(), haptics_clients[i].fd.get(),
+                 EventType::HapticsClient, i);
+  }
   return epoll_fd;
 }
 
@@ -2553,6 +2649,118 @@ void disconnect_all(std::vector<VirtualPort> &ports,
     controller.virtual_connected = false;
   }
   controllers.clear();
+}
+
+std::optional<std::size_t> resolve_haptics_port(
+    std::span<const VirtualPort> ports, std::uint32_t requested_port) {
+  std::optional<std::size_t> result;
+  for (std::size_t i = 0; i < ports.size(); ++i) {
+    const auto port = vds::port_index_from_path(ports[i].path);
+    if (port && *port == requested_port) {
+      result = i;
+      break;
+    }
+  }
+  return result;
+}
+
+void close_haptics_client(HapticsClient &client,
+                          std::span<VirtualPort> ports,
+                          vds::HapticsClientRegistry *registry = nullptr) {
+  std::optional<std::size_t> owned_port = client.port_index;
+  if (!registry) registry = g_haptics_registry;
+  if (registry && client.token) {
+    if (const auto registry_port = registry->disconnect(client.token)) {
+      owned_port = registry_port;
+    }
+  }
+  if (owned_port && *owned_port < ports.size()) {
+    auto &port = ports[*owned_port];
+    port.opends5_haptics_connected = false;
+    port.opends5_haptics_queue.clear();
+    port.legacy_rumble.disconnect();
+    port.opends5_haptics_peak_left = 0;
+    port.opends5_haptics_peak_right = 0;
+  }
+  client.fd.reset();
+  client.negotiation.reset();
+    client.port_index.reset();
+}
+
+void handle_haptics_client(HapticsClient &client,
+                           std::span<VirtualPort> ports,
+                           vds::HapticsStreamEndpoint &endpoint,
+                           vds::Logger &logger, bool &epoll_dirty) {
+  if (!client.negotiation) {
+    if (Clock::now() - client.accepted_at > kHapticsNegotiationTimeout) {
+      close_haptics_client(client, ports);
+      epoll_dirty = true;
+      return;
+    }
+    const auto negotiation = endpoint.receive_negotiation(client.fd.get());
+    if (!negotiation) return;
+    const auto port = resolve_haptics_port(ports, negotiation->port);
+    if (!port) {
+      logger.log(vds::LogScope::Control, vds::LogLevel::Warn,
+                 "haptics stream rejected: port is unavailable or ambiguous");
+      close_haptics_client(client, ports);
+      epoll_dirty = true;
+      return;
+    }
+    if (ports[*port].opends5_haptics_connected) {
+      logger.log(vds::LogScope::Control, vds::LogLevel::Warn,
+                 "haptics stream rejected: port already has an owner");
+      close_haptics_client(client, ports);
+      epoll_dirty = true;
+      return;
+    }
+    client.negotiation = negotiation;
+    client.port_index = *port;
+    if (g_haptics_registry && !g_haptics_registry->negotiate(client.token, *port,
+                                                              negotiation->stream_id)) {
+      close_haptics_client(client, ports);
+      epoll_dirty = true;
+      return;
+    }
+    ports[*port].opends5_haptics_queue.clear();
+    ports[*port].opends5_haptics_connected = true;
+    logger.log(vds::LogScope::Control, vds::LogLevel::Info,
+               "haptics stream opened port=" + std::to_string(negotiation->port) +
+                   " stream=" + std::to_string(negotiation->stream_id));
+    return;
+  }
+
+  for (int packet = 0; packet < kMaxHapticsPacketsPerWake; ++packet) {
+    auto frame = endpoint.receive_frame(client.fd.get());
+    if (!frame) return;
+    if (frame->stream_id != client.negotiation->stream_id) {
+      throw std::invalid_argument("haptics stream id changed after negotiation");
+    }
+    auto &port = ports[*client.port_index];
+    if (!port.opends5_haptics_connected) {
+      throw std::runtime_error("haptics stream port disconnected");
+    }
+    std::uint32_t left_peak = 0;
+    std::uint32_t right_peak = 0;
+    for (std::size_t i = 0; i < frame->samples.size(); i += 2) {
+      left_peak = std::max(left_peak, static_cast<std::uint32_t>(
+          std::min(1.0f, std::abs(frame->samples[i])) * 32767.0f));
+      right_peak = std::max(right_peak, static_cast<std::uint32_t>(
+          std::min(1.0f, std::abs(frame->samples[i + 1])) * 32767.0f));
+    }
+    port.opends5_haptics_peak_left = left_peak;
+    port.opends5_haptics_peak_right = right_peak;
+    const auto before = port.opends5_haptics_queue.dropped_samples();
+    port.opends5_haptics_queue.append(*frame);
+    port.trace_state.max_pending_queue_depth = std::max<std::uint64_t>(
+        port.trace_state.max_pending_queue_depth,
+        static_cast<std::uint64_t>(
+            port.pending_audio_chunks.size() +
+            port.opends5_haptics_queue.size_samples() /
+                vds::kHapticsOutputSamplesPerBoundary));
+    const auto after = port.opends5_haptics_queue.dropped_samples();
+    if (after > before) port.trace_state.opends5_ring_drop_count += after - before;
+  }
 }
 
 } // namespace
@@ -2577,13 +2785,20 @@ int main(int argc, char **argv) {
     }
 
     vds::UniqueFd control_fd(open_control_socket(options.socket));
+    vds::HapticsStreamEndpoint haptics_endpoint(options.socket + ".haptics");
+    haptics_endpoint.open();
     vds::BtL2capAcceptor bt_acceptor;
     vds::VdsDeviceMonitor vds_monitor;
     logger.log(vds::LogScope::Bluetooth, vds::LogLevel::Info,
                "listening for controller-initiated raw HID channels");
     SocketPathGuard control_socket_path(options.socket);
+    SocketPathGuard haptics_socket_path(haptics_endpoint.path());
     std::vector<VirtualPort> ports;
     std::vector<ControllerRuntime> controllers;
+    std::vector<HapticsClient> haptics_clients;
+    vds::HapticsClientRegistry haptics_registry(kMaxHapticsClients,
+                                                kHapticsNegotiationTimeout);
+    g_haptics_registry = &haptics_registry;
     vds::UniqueFd epoll_fd;
     std::uint32_t trace_flags = 0;
     bool reload_requested = true;
@@ -2606,6 +2821,11 @@ int main(int argc, char **argv) {
 
       if (reload_requested) {
         try {
+          for (auto &client : haptics_clients) {
+            close_haptics_client(client, ports);
+          }
+          haptics_clients.clear();
+          haptics_registry.reload();
           reconcile_controller_configs(ports, controllers, options.db_path,
                                        logger);
           epoll_dirty = true;
@@ -2617,13 +2837,22 @@ int main(int argc, char **argv) {
       }
 
       if (epoll_dirty || !epoll_fd) {
-        epoll_fd = rebuild_epoll(control_fd.get(), bt_acceptor, vds_monitor,
-                                 ports, controllers);
+        epoll_fd = rebuild_epoll(control_fd.get(), bt_acceptor, haptics_endpoint,
+                                 vds_monitor, ports, controllers,
+                                 haptics_clients);
         epoll_dirty = false;
       }
 
       std::array<epoll_event, 64> events{};
       int timeout_ms = next_wakeup_timeout_ms(ports, controllers);
+      const auto haptics_now = Clock::now();
+      for (const auto &client : haptics_clients) {
+        if (client.fd && !client.negotiation) {
+          const auto deadline = client.accepted_at + kHapticsNegotiationTimeout;
+          timeout_ms = std::min(timeout_ms, deadline <= haptics_now ? 0 :
+            static_cast<int>(std::chrono::ceil<std::chrono::milliseconds>(deadline - haptics_now).count()));
+        }
+      }
       if (const auto deadline =
               vds::next_companion_actuation_deadline(companion)) {
         const auto until = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2632,6 +2861,15 @@ int main(int argc, char **argv) {
         const int deadline_ms = static_cast<int>(std::max<long long>(until, 0));
         if (timeout_ms < 0 || deadline_ms < timeout_ms) {
           timeout_ms = deadline_ms;
+        }
+      }
+      // Expire clients independently of socket readiness so a flood on other
+      // descriptors cannot keep a silent negotiator alive indefinitely.
+      for (auto &client : haptics_clients) {
+        if (client.fd && !client.negotiation &&
+            Clock::now() - client.accepted_at >= kHapticsNegotiationTimeout) {
+          close_haptics_client(client, ports);
+          epoll_dirty = true;
         }
       }
       const int ready =
@@ -2657,6 +2895,13 @@ int main(int argc, char **argv) {
       }
 
       if (ready == 0) {
+        for (auto &client : haptics_clients) {
+          if (client.fd && !client.negotiation &&
+              Clock::now() - client.accepted_at >= kHapticsNegotiationTimeout) {
+            close_haptics_client(client, ports);
+            epoll_dirty = true;
+          }
+        }
         flush_pending_outputs(ports, controllers, trace_flags, logger,
                               epoll_dirty);
         continue;
@@ -2674,6 +2919,50 @@ int main(int argc, char **argv) {
           }
           if ((revents & (EPOLLERR | EPOLLHUP)) != 0) {
             throw std::runtime_error("control socket epoll error");
+          }
+          continue;
+        }
+
+        if (source.type == EventType::HapticsAccept) {
+          if ((revents & EPOLLIN) != 0) {
+            while (const auto fd = haptics_endpoint.accept_client()) {
+              const auto token = haptics_registry.accept(Clock::now());
+              if (!token) {
+                ::close(*fd);
+                break;
+              }
+              haptics_clients.push_back(HapticsClient{.fd = vds::UniqueFd(*fd),
+                                                      .token = *token,
+                                                      .accepted_at = Clock::now()});
+              epoll_dirty = true;
+            }
+          }
+          if ((revents & (EPOLLERR | EPOLLHUP)) != 0) {
+            throw std::runtime_error("haptics listener epoll error");
+          }
+          continue;
+        }
+
+        if (source.type == EventType::HapticsClient) {
+          if (source.index >= haptics_clients.size() ||
+              !haptics_clients[source.index].fd) {
+            continue;
+          }
+          auto &client = haptics_clients[source.index];
+          if ((revents & EPOLLIN) != 0) {
+            try {
+              handle_haptics_client(client, ports, haptics_endpoint, logger,
+                                    epoll_dirty);
+            } catch (const std::exception &error) {
+              logger.log(vds::LogScope::Control, vds::LogLevel::Warn,
+                         std::string("haptics stream closed: ") + error.what());
+              close_haptics_client(client, ports);
+              epoll_dirty = true;
+            }
+          }
+          if ((revents & (EPOLLERR | EPOLLHUP)) != 0) {
+            close_haptics_client(client, ports);
+            epoll_dirty = true;
           }
           continue;
         }
@@ -2812,6 +3101,11 @@ int main(int argc, char **argv) {
         apply_companion_state(ports, controllers, companion, trace_flags,
                               logger);
         applied_companion_version = companion.actuation.version;
+      }
+
+      if (epoll_dirty) {
+        std::erase_if(haptics_clients,
+                      [](const HapticsClient &client) { return !client.fd; });
       }
 
       flush_pending_outputs(ports, controllers, trace_flags, logger,

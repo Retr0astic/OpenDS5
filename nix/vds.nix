@@ -38,6 +38,7 @@ stdenv.mkDerivation {
     runHook preInstall
     install -Dm755 vdsd $out/bin/vdsd
     install -Dm755 vdsctl $out/bin/vdsctl
+    install -Dm755 vds-haptics-client $out/bin/vds-haptics-client
     install -Dm644 ../99-vds-dualsense-udev.rules \
       $out/lib/udev/rules.d/99-vds-dualsense.rules
     install -Dm644 ../99-vds-dualsense-wireplumber.conf \

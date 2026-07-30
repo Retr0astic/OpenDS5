@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Jihong Min <hurryman2212@gmail.com>
 
 #include <chrono>
+#include <algorithm>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -14,6 +15,7 @@
 #include <utility>
 
 #ifndef _WIN32
+#include <array>
 #include <cerrno>
 #include <cstring>
 
@@ -28,6 +30,8 @@ namespace {
 
 #ifndef _WIN32
 constexpr mode_t kVdsLogFileMode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
+constexpr mode_t kUserLogFileMode = S_IRUSR | S_IWUSR;
+constexpr mode_t kUserLogDirectoryMode = S_IRWXU;
 #endif
 
 std::string local_timestamp() {
@@ -81,17 +85,18 @@ void write_log_message(std::ostream &out, std::string_view message) {
   }
 }
 
-void prepare_log_file(const std::string &path) {
+void prepare_log_file(const std::string &path, unsigned int mode) {
 #ifdef _WIN32
   (void)path;
+  (void)mode;
 #else
   const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
-                        kVdsLogFileMode);
+                        static_cast<mode_t>(mode));
   if (fd < 0) {
     throw std::runtime_error("failed to open log file: " + path + ": " +
                              std::strerror(errno));
   }
-  if (::fchmod(fd, kVdsLogFileMode) < 0) {
+  if (::fchmod(fd, static_cast<mode_t>(mode)) < 0) {
     const int error = errno;
     (void)::close(fd);
     throw std::runtime_error("failed to chmod log file: " + path + ": " +
@@ -108,6 +113,44 @@ void prepare_log_file(const std::string &path) {
 
 namespace vds {
 
+std::string default_log_path() {
+#ifdef _WIN32
+  return kDefaultLogPath;
+#else
+  if (::geteuid() == 0) return kDefaultLogPath;
+  const char *xdg_state = std::getenv("XDG_STATE_HOME");
+  if (xdg_state && *xdg_state) {
+    return (std::filesystem::path(xdg_state) / "vds" / "vdsd.log").string();
+  }
+  const char *home = std::getenv("HOME");
+  if (home && *home) {
+    return (std::filesystem::path(home) / ".local" / "state" / "vds" /
+            "vdsd.log").string();
+  }
+  struct PrivateLogPath {
+    std::string path;
+    ~PrivateLogPath() {
+      std::error_code error;
+      std::filesystem::remove_all(std::filesystem::path(path).parent_path(), error);
+    }
+  };
+  static const PrivateLogPath private_log_path = [] {
+    std::array<char, 32> template_path{};
+    const std::string prefix = "/tmp/vdsd-";
+    std::copy(prefix.begin(), prefix.end(), template_path.begin());
+    std::copy_n("XXXXXX", 6, template_path.begin() + prefix.size());
+    char *directory = ::mkdtemp(template_path.data());
+    if (!directory) {
+      throw std::runtime_error(
+          "failed to create a private vDS log directory: " +
+          std::string(std::strerror(errno)));
+    }
+    return PrivateLogPath{(std::filesystem::path(directory) / "vdsd.log").string()};
+  }();
+  return private_log_path.path;
+#endif
+}
+
 Logger::Logger(const std::string &path) : path_(path) { file_ = open_file(); }
 
 std::ofstream Logger::open_file() const {
@@ -116,7 +159,22 @@ std::ofstream Logger::open_file() const {
   if (!directory.empty()) {
     std::filesystem::create_directories(directory);
   }
-  prepare_log_file(path_);
+  const bool system_log = path_ == kDefaultLogPath;
+#ifndef _WIN32
+  const bool managed_user_directory =
+      !system_log &&
+      (directory.filename() == "vds" ||
+       directory.string().rfind("/tmp/vdsd-", 0) == 0);
+  if (managed_user_directory) {
+    if (::chmod(directory.c_str(), kUserLogDirectoryMode) < 0) {
+      throw std::runtime_error("failed to chmod log directory: " +
+                               directory.string() + ": " + std::strerror(errno));
+    }
+  }
+  prepare_log_file(path_, system_log ? kVdsLogFileMode : kUserLogFileMode);
+#else
+  prepare_log_file(path_, 0);
+#endif
   std::ofstream file(path_, std::ios::app);
   if (!file) {
     throw std::runtime_error("failed to open log file: " + path_);

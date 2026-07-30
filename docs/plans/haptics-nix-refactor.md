@@ -118,6 +118,17 @@ Checkpoint:
 scripts/dev/graphify-checkpoint
 ```
 
+### Step 1 result / handoff
+
+Instruction and documentation scaffolding was audited. `docs/PORTING.md` is
+marked historical; README and installer references point to the accepted
+target architecture documents while explicitly describing current behavior
+until later steps land. Validation passed for the scoped documentation and
+configuration checks (including TOML parsing, limits, links, and
+`git diff --check`); the Graphify checkpoint passed inside `nix develop`.
+Reviewer findings are cleared. Hardware validation is not applicable to this
+documentation-only step.
+
 ## Step 2 — Separate Nix package ownership
 
 Agent use:
@@ -151,6 +162,18 @@ Checkpoint:
 ```sh
 scripts/dev/graphify-checkpoint
 ```
+
+### Step 2 result / handoff
+
+`opends5` now contains GUI-owned files only; `vds` remains the owner of
+`vdsd`, `vdsctl`, udev, systemd, and WirePlumber assets, with the kernel
+derivation still parameterized. The companion is built from a precise
+repository fileset including `ds5-bridge/assets`; Electron 42, its lockfile,
+and the captured npm dependency hash are aligned. The default flake app starts
+the GUI directly, while the privileged portable launcher is explicit. Output
+ownership, native-module, and Electron smoke checks were added. Full GUI,
+aarch64, and hardware behavior remain untested; `flake.lock` is unchanged.
+Required validation and Graphify checkpoint passed; reviewer findings cleared.
 
 ## Step 3 — Make NixOS module the sole system owner
 
@@ -287,6 +310,32 @@ Checkpoint:
 scripts/dev/graphify-checkpoint
 ```
 
+### Step 6 implementation handoff
+
+The daemon now exposes a credential-checked, nonblocking Unix
+`SOCK_SEQPACKET` listener beside its control socket, negotiates the fixed v1
+format, binds one stream owner to one virtual port, and stores validated frames
+in a separate bounded OpenDS5 queue. Disconnect and port reload clear only that
+source. The Linux helper keeps its existing PipeWire capture and filtering but
+routes generated four-channel frames through the packaged
+`vds-haptics-client`, which extracts the actuator pair; production helper
+output no longer invokes `pw-play` on the game sink. Socket, malformed-frame,
+overflow, sender-process, channel-extraction, and helper-routing paths are
+covered automatically; disconnect and port-reload cleanup are implemented in
+the daemon event loop. Step 7 must consume this queue in the
+source-aware mixer; Step 6 intentionally does not alter game PCM output or the
+lease-era physical arbitration.
+
+The production-backed lifecycle registry covers client caps, expiry, per-port
+ownership, disconnect cleanup, and reload. Final validation recorded 8/8 vDS
+tests and 85 focused companion/typecheck checks; independent review is cleared
+with no blocking findings. Hardware/live Bluetooth behavior remains
+unvalidated. Step 7 carries P2 follow-ups for source-specific status semantics,
+backpressure/drop observability, and sender allocation rationale/fix.
+
+Detailed continuation state is recorded in
+`docs/superpowers/plans/2026-07-30-haptics-step6-handoff.md`.
+
 ## Step 7 — Implement native-PCM source-aware mixer
 
 Agent use:
@@ -345,11 +394,33 @@ Acceptance:
 - No unnecessary conversion occurs for legacy-only game output.
 - State transitions do not click, flap, or leak across ports in automated tests.
 
+The legacy-rumble synthesizer uses deterministic per-port smoothing and no
+runtime allocation. Its gain and time response are intentionally provisional:
+hardware calibration is required before asserting equivalence with native
+motor drive.
+
 Checkpoint:
 
 ```sh
 scripts/dev/graphify-checkpoint
 ```
+
+## Step 7 closure
+
+Step 7 now uses a source-aware mixer with independent gains, limiter, and one
+final quantization step. The dedicated app source is resampled statefully from
+48 kHz to 3 kHz (16:1 box average; 512 input frames produce one 64-byte stereo
+actuator block). A fixed-capacity ring handles cross-packet continuity,
+overflow, stale partials, and backpressure without blocking game output. Output
+is data-driven with a 10 ms minimum Bluetooth throttle; `off`, `mix`, and
+native-PCM `replace` preserve speaker payloads and leave HapticLease/legacy
+semantics unchanged. Status reports source drops and limiting without
+double-counting.
+
+Validation recorded: vDS build and deterministic tests pass (endpoint socket
+test requires host socket permission); companion focused typecheck/tests pass.
+Live Bluetooth, hardware feel, and suspend/resume remain unvalidated. Step 8
+is next.
 
 ## Step 9 — Remove the 100 ms ownership lease
 

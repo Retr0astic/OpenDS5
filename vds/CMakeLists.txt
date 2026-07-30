@@ -148,7 +148,9 @@ else()
   target_link_libraries(vds_udev PUBLIC vds_config vds_common vds_io
                                         PkgConfig::UDEV)
 
-  add_executable(vdsd src/platform/linux/vdsd.cc)
+  add_executable(vdsd src/platform/linux/vdsd.cc src/haptics_stream_endpoint.cc
+                 src/haptics_stream.cc src/haptics_mixer.cc src/legacy_rumble.cc
+                 src/platform/linux/haptics_client_registry.cc)
   add_dependencies(vdsd vds_build_info_header)
   target_include_directories(vdsd PRIVATE ${VDS_GENERATED_DIR})
   target_link_libraries(
@@ -176,6 +178,11 @@ else()
             vds_io
             vdsctl_common
             vds_udev)
+
+  add_executable(vds-haptics-client
+                 src/platform/linux/vds_haptics_client.cc
+                 src/haptics_stream.cc src/haptics_stream_endpoint.cc)
+  target_include_directories(vds-haptics-client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 endif()
 
 if(BUILD_TESTING)
@@ -188,12 +195,6 @@ if(BUILD_TESTING)
   target_link_libraries(output_state_haptics_test PRIVATE vds_protocol)
   add_test(NAME output_state_haptics_test
            COMMAND $<TARGET_FILE:output_state_haptics_test>)
-
-  if(NOT WIN32)
-    add_executable(haptic_lease_test tests/haptic_lease_test.cc)
-    target_link_libraries(haptic_lease_test PRIVATE vds_protocol)
-    add_test(NAME haptic_lease_test COMMAND $<TARGET_FILE:haptic_lease_test>)
-  endif()
 
   add_executable(companion_buffer_length_test
                  tests/companion_buffer_length_test.cc)
@@ -215,6 +216,35 @@ if(BUILD_TESTING)
   target_include_directories(
     haptics_stream_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   add_test(NAME haptics_stream_test COMMAND $<TARGET_FILE:haptics_stream_test>)
+
+  add_executable(haptics_mixer_test tests/haptics_mixer_test.cc
+                 src/haptics_mixer.cc)
+  target_include_directories(haptics_mixer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+                             ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  add_test(NAME haptics_mixer_test COMMAND $<TARGET_FILE:haptics_mixer_test>)
+
+  add_executable(legacy_rumble_test tests/legacy_rumble_test.cc
+                 src/legacy_rumble.cc src/haptics_mixer.cc)
+  target_include_directories(legacy_rumble_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+                             ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  add_test(NAME legacy_rumble_test COMMAND $<TARGET_FILE:legacy_rumble_test>)
+
+  if(NOT WIN32)
+    add_executable(haptics_stream_endpoint_test
+                   tests/haptics_stream_endpoint_test.cc
+                   src/haptics_stream.cc src/haptics_stream_endpoint.cc)
+    target_include_directories(
+      haptics_stream_endpoint_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_dependencies(haptics_stream_endpoint_test vds-haptics-client)
+    add_test(NAME haptics_stream_endpoint_test
+             COMMAND $<TARGET_FILE:haptics_stream_endpoint_test>
+                     $<TARGET_FILE:vds-haptics-client>)
+    add_executable(haptics_client_registry_test
+                   tests/haptics_client_registry_test.cc
+                   src/platform/linux/haptics_client_registry.cc)
+    target_include_directories(haptics_client_registry_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME haptics_client_registry_test COMMAND $<TARGET_FILE:haptics_client_registry_test>)
+  endif()
 endif()
 
 if(WIN32)
@@ -317,6 +347,9 @@ if(WIN32 AND INSTALL_SERVICE)
 endif()
 
 install(TARGETS vdsd vdsctl RUNTIME DESTINATION ${VDS_RUNTIME_INSTALL_DIR})
+if(NOT WIN32)
+  install(TARGETS vds-haptics-client RUNTIME DESTINATION ${VDS_RUNTIME_INSTALL_DIR})
+endif()
 
 if(WIN32)
   if(INSTALL_SERVICE)

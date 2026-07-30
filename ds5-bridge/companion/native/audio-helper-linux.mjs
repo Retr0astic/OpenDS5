@@ -11,6 +11,25 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 const SAMPLE_RATE = 48000;
+// Small seam used by the real-time capture path and behavioral tests. A
+// blocked child stdin drops the chunk immediately; later calls resume once
+// writableNeedDrain clears, without buffering or diagnostic spam.
+export function createHapticsInputWriter(stdin, onDrop = () => {}) {
+  let dropped = false;
+  return (chunk) => {
+    if (!stdin.writable || stdin.writableNeedDrain) {
+      ++dropped;
+      if (dropped === 1) onDrop(dropped);
+      return false;
+    }
+    if (!stdin.write(chunk)) {
+      ++dropped;
+      if (dropped === 1) onDrop(dropped);
+      return false;
+    }
+    return true;
+  };
+}
 export const BRIDGE_ENDPOINT_ISSUES = Object.freeze({
   MISSING_CARD: 'missing-card',
   MISSING_SINK: 'missing-sink',
@@ -380,7 +399,6 @@ export function readHapticsConfig(args) {
 
 async function runRenderLoopbackHaptics(args) {
   const sink = await requireBridgeSink();
-  const target = nodeProps(sink)['node.name'];
   const config = readHapticsConfig(args);
   const processor = new HapticsProcessor(config);
   processor.setVolumeSync(config.volumeSync);
@@ -398,7 +416,8 @@ async function runRenderLoopbackHaptics(args) {
   // following the system default sink.
   const captureDevice = argValue(args, '--haptics-output-device');
 
-  const play = spawn('pw-play', hapticsPlaybackArgs(target), { stdio: ['pipe', 'ignore', 'pipe'] });
+  const hapticsClient = process.env.OPENDS5_HAPTICS_CLIENT || 'vds-haptics-client';
+  const play = spawn(hapticsClient, hapticsClientArgs(args), { stdio: ['pipe', 'ignore', 'pipe'] });
   play.stderr.on('data', (chunk) => process.stderr.write(chunk));
 
   let record = null;
@@ -406,6 +425,15 @@ async function runRenderLoopbackHaptics(args) {
   let volumeTimer = null;
   let stopping = false;
   let announcedRecording = false;
+  let droppedInputChunks = 0;
+  let dropDiagnosticEmitted = false;
+  const writeHaptics = createHapticsInputWriter(play.stdin, () => {
+    droppedInputChunks += 1;
+    if (!dropDiagnosticEmitted) {
+      dropDiagnosticEmitted = true;
+      process.stderr.write('status: haptics-input-drop\n');
+    }
+  });
 
   // Playback always goes to the bridge sink. Its per-channel volumes
   // (ears = channel 0, haptic = channel 2) drive the compensation: the
@@ -463,7 +491,8 @@ async function runRenderLoopbackHaptics(args) {
     play.kill();
     process.exit(code);
   };
-  play.on('exit', (code) => shutdown(code ?? 1, 'playback stream ended'));
+  play.on('error', (error) => shutdown(1, `haptics IPC client failed: ${error.message}`));
+  play.on('exit', (code) => shutdown(code ?? 1, 'haptics IPC stream ended'));
 
   const pipeRecordToProcessor = (proc, stride) => {
     let carry = Buffer.alloc(0);
@@ -477,9 +506,7 @@ async function runRenderLoopbackHaptics(args) {
       }
       const input = new Float32Array(data.buffer, data.byteOffset, usable / 4);
       const output = processor.process(input);
-      if (play.stdin.writable) {
-        play.stdin.write(Buffer.from(output.buffer, 0, output.byteLength));
-      }
+      writeHaptics(Buffer.from(output.buffer, 0, output.byteLength));
     });
     proc.stderr.on('data', (chunk) => process.stderr.write(chunk));
     proc.on('spawn', () => {
@@ -548,9 +575,7 @@ async function runRenderLoopbackHaptics(args) {
       }
       const blocks = ready.map((stream) => stream.take(MIX_BLOCK_FRAMES));
       const output = processor.process(sumBusFrames(blocks));
-      if (play.stdin.writable) {
-        play.stdin.write(Buffer.from(output.buffer, 0, output.byteLength));
-      }
+      writeHaptics(Buffer.from(output.buffer, 0, output.byteLength));
     }
   };
 
@@ -860,6 +885,17 @@ export function hapticsPlaybackArgs(target) {
     '--latency', '256',
     '-'
   ];
+}
+
+export function hapticsClientArgs(args, env = process.env) {
+  const socket = argValue(args, '--haptics-socket')
+    ?? env.OPENDS5_HAPTICS_SOCKET
+    ?? '/run/vdsd.sock.haptics';
+  const port = argValue(args, '--haptics-port')
+    ?? env.OPENDS5_HAPTICS_PORT
+    ?? '0';
+  const streamId = Math.max(1, process.pid >>> 0);
+  return ['--socket', socket, '--port', `${port}`, '--stream-id', `${streamId}`];
 }
 
 export function appCaptureRecordArgs(node, layout) {

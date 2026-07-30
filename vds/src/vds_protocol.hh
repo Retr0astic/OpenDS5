@@ -16,41 +16,6 @@
 
 namespace vds {
 
-class HapticLease {
-public:
-  using Clock = std::chrono::steady_clock;
-  using TimePoint = Clock::time_point;
-
-  static constexpr auto kDuration = std::chrono::milliseconds(100);
-
-  bool activate(TimePoint now) {
-    const bool changed = !active_;
-    active_ = true;
-    deadline_ = now + kDuration;
-    return changed;
-  }
-
-  bool expire(TimePoint now) {
-    if (!active_ || now < deadline_) return false;
-    clear();
-    return true;
-  }
-
-  bool clear() {
-    const bool changed = active_;
-    active_ = false;
-    deadline_ = {};
-    return changed;
-  }
-
-  bool active() const { return active_; }
-  TimePoint deadline() const { return deadline_; }
-
-private:
-  bool active_ = false;
-  TimePoint deadline_{};
-};
-
 constexpr std::size_t kBtHapticsReportSize = VDS_BT_HAPTICS_REPORT_SIZE;
 constexpr std::size_t kBtInitReportSize = 142;
 constexpr std::size_t kBtStateReportSize = VDS_BT_STATE_REPORT_SIZE;
@@ -187,7 +152,7 @@ public:
   DsOutputState();
 
   bool apply_usb_output_report(std::span<const std::uint8_t> report);
-  void set_haptic_audio_active(bool active);
+  void set_haptic_output_override(bool active);
   void set_audio_out_stream_active(bool active, bool headset_plugged = false);
   void set_headset_mic_plugged(bool plugged);
   BtStateReport build_bt_mic_state_report(bool active, bool muted);
@@ -217,7 +182,7 @@ private:
   std::uint8_t light_brightness_ = 0;
   bool emulate_light_brightness_ = false;
   bool headset_mic_plugged_ = false;
-  bool haptic_audio_active_ = false;
+  bool haptic_output_override_ = false;
   std::uint8_t report_sequence_ = 0;
   std::uint8_t mic_sequence_ = 0;
 };

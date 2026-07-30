@@ -1138,13 +1138,26 @@ function registerIpc(
 ): void {
   ipcMain.handle('bridge:getLinuxHapticsRepairStatus', () => {
     if (process.platform !== 'linux') return { status: 'unavailable', path: '', detail: 'WirePlumber repair is available on Linux only.' };
-    const expected = setupService.wirePlumberExpectedContent();
-    return setupService.wirePlumberConfigStatus(expected);
+    try {
+      const expected = setupService.wirePlumberExpectedContent();
+      return setupService.wirePlumberConfigStatus(expected);
+    } catch {
+      return {
+        status: 'unavailable',
+        path: '',
+        detail: 'OpenDS5 WirePlumber config is unavailable in this build; install the vDS package or set OPENDS5_WIREPLUMBER_CONFIG, then retry.'
+      };
+    }
   });
   ipcMain.handle('bridge:repairLinuxHaptics', async (_event, approved: boolean): Promise<LinuxHapticsRepairResult> => {
     if (process.platform !== 'linux') throw new Error('WirePlumber repair is available on Linux only.');
     if (approved !== true) throw new Error('WirePlumber repair requires explicit approval.');
-    const expected = setupService.wirePlumberExpectedContent();
+    let expected: string;
+    try {
+      expected = setupService.wirePlumberExpectedContent();
+    } catch {
+      throw new Error('OpenDS5 WirePlumber config is unavailable in this build; install the vDS package or set OPENDS5_WIREPLUMBER_CONFIG before repairing.');
+    }
     const before = setupService.wirePlumberConfigStatus(expected);
     const config = setupService.repairWirePlumberConfig(expected, before, true);
     const reload = await setupService.reloadWirePlumber(async () => (

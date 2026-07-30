@@ -11,10 +11,8 @@
 
   system = pkgs.stdenv.hostPlatform.system;
   vdsUsers = cfg.users;
-  defaultPackage = self.packages.${system}.opends5;
   effectiveVdsPackage =
     if cfg.vdsPackage != null then cfg.vdsPackage
-    else if cfg.package == defaultPackage then cfg.package
     else self.packages.${system}.vds;
 in {
   options.services.opends5 = {
@@ -33,12 +31,12 @@ in {
       type = lib.types.nullOr lib.types.package;
       default = null;
       defaultText =
-        lib.literalExpression "null (use services.opends5.package)";
+        lib.literalExpression "null (use the flake's standalone vds package)";
       description = ''
         Optional package containing vdsd and vdsctl. An explicit value wins.
-        With the default bundled companion package, that bundle supplies vDS;
-        with a custom companion-only package, the flake's standalone vds package
-        is used for backward compatibility.
+        When unset, the standalone flake vds package supplies the daemon,
+        udev rules, and WirePlumber configuration independently of the GUI
+        companion package.
       '';
     };
 

@@ -68,8 +68,8 @@ int main() {
   const std::vector<vds::VdsdControlAudioStats> stats = {
       {.port = 2,
        .path = "/dev/vds2",
-       .haptics_policy = "mix",
-       .audio_out_stream_active = false},
+       .audio_out_stream_active = false,
+       .haptics_policy = "mix"},
       {.port = 0,
        .path = "/dev/vds0",
        .audio_out_stream_active = true,

@@ -8269,6 +8269,7 @@ export function App() {
                         </button>
                       )}
                       {wirePlumberRepairStatus?.status === 'package-managed' && <span>Managed by package/Nix; edit the system configuration.</span>}
+                      {wirePlumberRepairStatus?.status === 'unavailable' && <span>{wirePlumberRepairStatus.detail}</span>}
                       {(wirePlumberRepairStatus?.status === 'symlink' || wirePlumberRepairStatus?.status === 'non-regular') && (
                         <span>Protected path; replace the symlink or non-regular entry manually, then recheck.</span>
                       )}

@@ -122,11 +122,22 @@ HapticsStreamQueue::HapticsStreamQueue(std::size_t capacity)
 
 void HapticsStreamQueue::push(HapticsStreamFrame frame) {
   validate_frame(frame);
+  if (have_sequence_ && frame.sequence < next_sequence_) {
+    ++stats_.stale;
+    ++stats_.dropped;
+    return;
+  }
+  if (last_timestamp_ns_ != 0 && frame.monotonic_timestamp_ns < last_timestamp_ns_) {
+    ++stats_.stale;
+    ++stats_.dropped;
+    return;
+  }
   if (have_sequence_ && frame.sequence > next_sequence_) {
     stats_.sequence_gaps += frame.sequence - next_sequence_;
   }
   have_sequence_ = true;
   next_sequence_ = frame.sequence + 1;
+  last_timestamp_ns_ = frame.monotonic_timestamp_ns;
   if (frames_.size() == capacity_) {
     frames_.pop_front();
     ++stats_.dropped;
@@ -144,6 +155,86 @@ bool HapticsStreamQueue::pop(HapticsStreamFrame &frame) {
   return true;
 }
 
-void HapticsStreamQueue::clear() { frames_.clear(); }
+void HapticsStreamQueue::clear() {
+  frames_.clear();
+  have_sequence_ = false;
+  next_sequence_ = 0;
+  last_timestamp_ns_ = 0;
+}
+
+HapticsSampleRing::HapticsSampleRing(std::size_t capacity_frames)
+    : samples_(capacity_frames * kHapticsStreamChannels) {
+  if (capacity_frames == 0) {
+    throw std::invalid_argument("haptics sample ring capacity must be nonzero");
+  }
+}
+
+void HapticsSampleRing::append(const HapticsStreamFrame& frame) {
+  validate_frame(frame);
+  if ((have_sequence_ && frame.sequence < next_sequence_) ||
+      (last_timestamp_ns_ != 0 &&
+       frame.monotonic_timestamp_ns < last_timestamp_ns_)) {
+    dropped_samples_ += frame.samples.size();
+    stale_dropped_samples_ += frame.samples.size();
+    return;
+  }
+  have_sequence_ = true;
+  next_sequence_ = frame.sequence + 1;
+  last_timestamp_ns_ = frame.monotonic_timestamp_ns;
+  const auto now = std::chrono::steady_clock::now();
+  if (size_samples_ == 0 && accum_frames_ == 0) partial_since_ = now;
+  for (std::size_t i = 0; i < frame.samples.size(); i += 2) {
+    accum_left_ += frame.samples[i];
+    accum_right_ += frame.samples[i + 1];
+    ++accum_frames_;
+    if (accum_frames_ < 16) continue;
+    const float reduced[2] = {accum_left_ / 16.0F, accum_right_ / 16.0F};
+    accum_left_ = accum_right_ = 0.0F;
+    accum_frames_ = 0;
+    for (const float sample : reduced) {
+    if (size_samples_ == samples_.size()) {
+      // Drop one complete stereo sample, preserving channel alignment.
+      read_ = (read_ + kHapticsStreamChannels) % samples_.size();
+      size_samples_ -= kHapticsStreamChannels;
+      dropped_samples_ += kHapticsStreamChannels;
+    }
+    samples_[write_] = sample;
+    write_ = (write_ + 1) % samples_.size();
+    ++size_samples_;
+    }
+  }
+}
+
+bool HapticsSampleRing::pop_block(
+    std::span<float, kHapticsOutputSamplesPerBoundary> block) {
+  if (size_samples_ < block.size()) return false;
+  for (float& sample : block) {
+    sample = samples_[read_];
+    read_ = (read_ + 1) % samples_.size();
+    --size_samples_;
+  }
+  if (size_samples_ == 0) partial_since_ = {};
+  return true;
+}
+
+bool HapticsSampleRing::drop_stale(std::chrono::steady_clock::time_point now,
+                                   std::chrono::milliseconds timeout) {
+  if (!has_partial() || size_samples_ >= kHapticsOutputSamplesPerBoundary || partial_since_ == std::chrono::steady_clock::time_point{}) return false;
+  if (now - partial_since_ < timeout) return false;
+  dropped_samples_ += size_samples_;
+  stale_dropped_samples_ += size_samples_;
+  clear();
+  return true;
+}
+
+void HapticsSampleRing::clear() {
+  read_ = write_ = size_samples_ = 0;
+  partial_since_ = {};
+  accum_left_ = accum_right_ = 0.0F;
+  accum_frames_ = 0;
+  have_sequence_ = false;
+  next_sequence_ = 0;
+  last_timestamp_ns_ = 0;
+}
 
 } // namespace vds

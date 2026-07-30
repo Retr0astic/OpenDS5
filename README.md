@@ -137,6 +137,16 @@ exit codes, and logs.
 
 ## ⚙️ How it works
 
+For the current component boundaries and runtime data flow, see the
+[architecture overview](docs/architecture/overview.md), which records the
+accepted target architecture for the ongoing refactor. Until later steps
+land, the behavior described below remains current. The
+[Nix packaging guide](docs/architecture/nix-packaging.md) records the accepted
+target ownership design for ongoing packaging work; the installer and flake
+behavior described below remains current until that work lands. The
+historical [porting plan](docs/PORTING.md) remains available for background on
+the original DS5 Bridge migration.
+
 ```
 DualSense (Bluetooth)
    │

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #include <array>
 #include <cassert>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -37,7 +36,7 @@ int main() {
   const auto base_state = first.state();
 
   // Speaker-only and silent PCM never enter audio-haptics arbitration.
-  first.set_haptic_audio_active(false);
+  first.set_haptic_output_override(false);
   assert(bit(first.state()[0], 0));
   assert(bit(first.state()[0], 1));
   assert(bit(first.state()[kImprovedRumbleOffset], 2));
@@ -45,33 +44,15 @@ int main() {
   assert(bit(first.state()[kPowerSaveOffset], 7));
 
   // A nonzero rear-channel chunk temporarily forces native audio haptics.
-  first.set_haptic_audio_active(true);
+  first.set_haptic_output_override(true);
   assert(!bit(first.state()[0], 0));
   assert(!bit(first.state()[0], 1));
   assert(!bit(first.state()[kImprovedRumbleOffset], 2));
   assert(!bit(first.state()[kPowerSaveOffset], 2));
   assert(!bit(first.state()[kPowerSaveOffset], 7));
-  // Model the daemon's deterministic lease transitions without sleeping: each
-  // nonzero chunk renews the deadline, and legacy rumble stays suppressed
-  // until the final expiry.
-  const auto lease_start = vds::HapticLease::TimePoint{} + std::chrono::seconds(1);
-  vds::HapticLease lease;
-  const auto consume_nonzero_chunk = [&](vds::HapticLease::TimePoint now) {
-    lease.activate(now);
-    first.set_haptic_audio_active(true);
-    assert(!bit(first.state()[0], 0));
-    assert(!bit(first.state()[0], 1));
-    assert(!bit(first.state()[kImprovedRumbleOffset], 2));
-  };
-  consume_nonzero_chunk(lease_start);
-  consume_nonzero_chunk(lease_start + 50ms);
-  consume_nonzero_chunk(lease_start + 100ms);
-  assert(lease.deadline() == lease_start + 200ms);
-  assert(!lease.expire(lease_start + 199ms));
-  assert(!bit(first.state()[0], 1));
-  assert(!bit(first.state()[kImprovedRumbleOffset], 2));
-  assert(lease.expire(lease_start + 200ms));
-  first.set_haptic_audio_active(false);
+  // The explicit source/policy decision remains active until changed; PCM
+  // timing and silence cannot expire it.
+  first.set_haptic_output_override(false);
   assert(bit(first.state()[0], 0));
   assert(bit(first.state()[0], 1));
   assert(bit(first.state()[kImprovedRumbleOffset], 2));
@@ -83,6 +64,7 @@ int main() {
 
   // The same effective overlay is present in a constructed Bluetooth state
   // packet and unrelated host-owned bytes remain untouched.
+  first.set_haptic_output_override(true);
   const auto bt_report = first.build_bt_state_report();
   assert(!bit(bt_report[kBtStateOffset + 0], 0));
   assert(!bit(bt_report[kBtStateOffset + 0], 1));
@@ -90,7 +72,7 @@ int main() {
   assert(!bit(bt_report[kBtStateOffset + kPowerSaveOffset], 2));
   assert(!bit(bt_report[kBtStateOffset + kPowerSaveOffset], 7));
 
-  // Host reports received during the lease update the base state while the
+  // Host reports received during the override update the base state while the
   // overlay stays active; expiry restores the newest report, not a snapshot.
   auto updated_host_report = host_report;
   updated_host_report[0] = 0x01; // newest host state no longer requests bit 1
@@ -99,26 +81,30 @@ int main() {
   assert(!bit(first.state()[0], 1));
 
   // The exact host request is restored after the haptic chunk ends.
-  first.set_haptic_audio_active(false);
+  first.set_haptic_output_override(false);
   assert(bit(first.state()[0], 0));
   assert(!bit(first.state()[0], 1));
   assert(bit(first.state()[kImprovedRumbleOffset], 2));
   assert(bit(first.state()[kPowerSaveOffset], 2));
   assert(!bit(first.state()[kPowerSaveOffset], 7));
 
-  // Closing the audio stream also ends arbitration if no trailing silent
-  // chunk arrives.
-  first.set_haptic_audio_active(true);
+  // A replace-policy decision remains explicit across game audio routing
+  // changes. Stopping the audio-out stream must not restore legacy rumble.
+  first.set_haptic_output_override(true);
   first.set_audio_out_stream_active(false);
   assert(!bit(first.state()[0], 1));
   assert(!bit(first.state()[kPowerSaveOffset], 7));
+  assert(!bit(first.state()[kImprovedRumbleOffset], 2));
+  assert(!bit(first.state()[kPowerSaveOffset], 2));
+  first.set_haptic_output_override(false);
+  assert(!bit(first.state()[0], 1));
   assert(bit(first.state()[kImprovedRumbleOffset], 2));
   assert(bit(first.state()[kPowerSaveOffset], 2));
 
   // Arbitration belongs to one controller/output-state instance only.
   vds::DsOutputState second;
   assert(second.apply_usb_output_report(host_report));
-  first.set_haptic_audio_active(true);
+  first.set_haptic_output_override(true);
   assert(!bit(first.state()[0], 1));
   assert(bit(second.state()[0], 1));
   assert(bit(second.state()[kPowerSaveOffset], 7));
