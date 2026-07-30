@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+python3 - <<'PY'
+from pathlib import Path
+import tomllib
+
+paths = [Path(".codex/config.toml"), *sorted(Path(".codex/agents").glob("*.toml"))]
+errors = []
+
+for path in paths:
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        errors.append(f"{path}: {exc}")
+        continue
+
+    if path.parent.name == "agents":
+        for key in ("name", "description", "developer_instructions"):
+            if not data.get(key):
+                errors.append(f"{path}: missing required {key!r}")
+
+if errors:
+    print("\n".join(errors))
+    raise SystemExit(1)
+
+print(f"validated {len(paths)} Codex TOML files")
+PY

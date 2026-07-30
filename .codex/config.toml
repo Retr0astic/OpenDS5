@@ -1,3 +1,6 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+# Preserve the user's requested project limits.
 [agents]
 max_threads = 3
 max_depth = 1

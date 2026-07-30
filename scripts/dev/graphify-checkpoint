@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if ! command -v graphify >/dev/null 2>&1; then
+  printf '%s\n' \
+    "graphify is unavailable in the current development environment." \
+    "Enter the repository's nix develop shell and use the project's documented Graphify setup." >&2
+  exit 127
+fi
+
+graphify update . --no-cluster

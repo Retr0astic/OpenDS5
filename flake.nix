@@ -161,6 +161,7 @@
             fish
             nodejs
             git
+            graphify
             ripgrep
             fd
             jq

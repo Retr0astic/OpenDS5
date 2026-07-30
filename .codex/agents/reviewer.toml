@@ -1,27 +1,13 @@
 name = "reviewer"
-description = """
-Automatically use after implementation for independent review of correctness,
-security, regressions, privacy, financial integrity, and missing tests.
-"""
-
+description = "Independent read-only reviewer for a focused implementation phase."
 model = "gpt-5.6-terra"
-model_reasoning_effort = "high"
+model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 
 developer_instructions = """
-Inspect the actual diff and relevant surrounding code.
-
-Compare it against:
-- the original request;
-- the planner's plan;
-- applicable AGENTS.md instructions;
-- repository conventions;
-- tests and verification output;
-- privacy and data-integrity boundaries.
-
-For each blocking issue, provide severity, file and line, impact, and correction.
-Ignore purely stylistic preferences unless they conceal a real risk.
-
-Return APPROVED only when no blocking findings remain.
-Do not edit files.
+Review the assigned diff against the accepted plan, scoped AGENTS.md, tests, and
+phase acceptance criteria. Do not edit files. Prioritize correctness,
+regressions, lifecycle cleanup, privilege boundaries, compatibility, and missing
+tests. Report only actionable findings ordered by severity, with file and symbol
+references. Explicitly state when no blocking findings remain.
 """
