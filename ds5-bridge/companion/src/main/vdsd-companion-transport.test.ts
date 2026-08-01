@@ -29,7 +29,10 @@ describe('VdsdCompanionTransport', () => {
     dir = mkdtempSync(join(tmpdir(), 'vdsd-transport-'));
     socketPath = join(dir, 'vdsd.sock');
     requests = [];
-    handler = () => ({ OK: true, report: statusReport() });
+    handler = (request) => request.command === 'capabilities'
+      ? { OK: true, controlProtocol: 4, hapticsStreamProtocol: 1,
+        features: ['source-aware-haptics', 'haptics-policy-v1'] }
+      : { OK: true, report: statusReport() };
     server = createServer((socket) => {
       let data = '';
       socket.on('data', (chunk) => {
@@ -58,6 +61,7 @@ describe('VdsdCompanionTransport', () => {
     const transport = await VdsdCompanionTransport.open({ socketPath });
     expect(transport.path).toBe(socketPath);
     expect(requests).toEqual([
+      { command: 'capabilities' },
       { command: 'companion', op: 'get', report_id: [1] }
     ]);
     transport.close();
@@ -102,5 +106,23 @@ describe('VdsdCompanionTransport', () => {
     await expect(
       VdsdCompanionTransport.open({ socketPath: join(dir, 'missing.sock') })
     ).rejects.toThrow();
+  });
+
+  it('rejects an incompatible daemon capability response with an actionable error', async () => {
+    handler = (request) => request.command === 'capabilities'
+      ? { OK: true, controlProtocol: 3, hapticsStreamProtocol: 1, features: [] }
+      : { OK: true, report: statusReport() };
+    await expect(VdsdCompanionTransport.open({ socketPath })).rejects.toThrow(
+      'Incompatible vdsd daemon'
+    );
+  });
+
+  it('keeps legacy companion access when an older daemon lacks capabilities', async () => {
+    handler = (request) => request.command === 'capabilities'
+      ? { OK: false, error: 'unknown command: capabilities' }
+      : { OK: true, report: statusReport() };
+    const transport = await VdsdCompanionTransport.open({ socketPath });
+    expect(transport.supportsFeature('haptics-policy-v1')).toBe(false);
+    transport.close();
   });
 });

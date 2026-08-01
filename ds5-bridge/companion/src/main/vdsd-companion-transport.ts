@@ -11,6 +11,15 @@ type VdsdReply = {
   OK: boolean;
   error?: string;
   report?: number[];
+  controlProtocol?: number;
+  hapticsStreamProtocol?: number;
+  features?: unknown;
+};
+
+export type VdsdCapabilities = {
+  controlProtocol: number;
+  hapticsStreamProtocol: number;
+  features: string[];
 };
 
 const REQUEST_TIMEOUT_MS = 1500;
@@ -31,7 +40,7 @@ export function defaultVdsdSocketPath(): string {
 export class VdsdCompanionTransport extends EventEmitter {
   private closed = false;
 
-  private constructor(readonly path: string) {
+  private constructor(readonly path: string, readonly capabilities: VdsdCapabilities | null) {
     super();
   }
 
@@ -43,9 +52,21 @@ export class VdsdCompanionTransport extends EventEmitter {
 
     while (true) {
       try {
-        const transport = new VdsdCompanionTransport(socketPath);
+        const transport = new VdsdCompanionTransport(socketPath, null);
+        let capabilities: VdsdCapabilities | null;
+        try {
+          capabilities = parseCapabilities(await transport.request({ command: 'capabilities' }));
+        } catch (error) {
+          // Older daemons have no capability command. Keep legacy companion
+          // reports usable, but never advertise the new source-aware path.
+          const message = error instanceof Error ? error.message : String(error);
+          if (!message.includes('unknown command: capabilities')) {
+            throw incompatibleDaemonError(message);
+          }
+          capabilities = null;
+        }
         await transport.request({ command: 'companion', op: 'get', report_id: [1] });
-        return transport;
+        return new VdsdCompanionTransport(socketPath, capabilities);
       } catch (error) {
         const lastError = error instanceof Error ? error : new Error(String(error));
         const elapsedMs = Date.now() - startedAt;
@@ -55,6 +76,10 @@ export class VdsdCompanionTransport extends EventEmitter {
         await delay(Math.min(retryDelayMs, retryTimeoutMs - elapsedMs));
       }
     }
+  }
+
+  supportsFeature(feature: string): boolean {
+    return this.capabilities?.features.includes(feature) ?? false;
   }
 
   async getFeatureReport(reportId: number, _length = REPORT_LENGTH): Promise<number[]> {
@@ -138,6 +163,25 @@ export class VdsdCompanionTransport extends EventEmitter {
       });
     });
   }
+}
+
+function parseCapabilities(reply: VdsdReply): VdsdCapabilities {
+  if (reply.OK !== true || reply.controlProtocol !== 4 ||
+      reply.hapticsStreamProtocol !== 1 || !Array.isArray(reply.features) ||
+      !reply.features.every((feature): feature is string => typeof feature === 'string')) {
+    throw new Error('daemon capability response is missing required version or feature fields');
+  }
+  return {
+    controlProtocol: reply.controlProtocol,
+    hapticsStreamProtocol: reply.hapticsStreamProtocol,
+    features: reply.features
+  };
+}
+
+function incompatibleDaemonError(detail: string): Error {
+  return new Error(
+    `Incompatible vdsd daemon: ${detail}. Restart vdsd or install the matching OpenDS5 vds package.`
+  );
 }
 
 function normalizeReport(report: ArrayLike<number>): number[] {

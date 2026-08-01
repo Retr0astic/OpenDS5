@@ -107,7 +107,9 @@ in {
       effectiveVdsPackage
     ];
 
-    environment.etc."wireplumber/wireplumber.conf.d/99-vds-dualsense.conf".source = "${effectiveVdsPackage}/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf";
+    services.pipewire.wireplumber.configPackages = [
+      effectiveVdsPackage
+    ];
 
     systemd.services.vdsd = {
       description = "vDS userspace daemon (OpenDS5)";

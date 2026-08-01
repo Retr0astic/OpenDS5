@@ -151,7 +151,7 @@
         module-package-policy = pkgs.runCommand "opends5-module-package-policy" { } ''
           test '${defaultEval.systemd.services.vdsd.serviceConfig.ExecStart}' = '${vds}/bin/vdsd'
           test '${builtins.head defaultEval.services.udev.packages}' = '${vds}'
-          test '${defaultEval.environment.etc."wireplumber/wireplumber.conf.d/99-vds-dualsense.conf".source}' = '${vds}/share/wireplumber/wireplumber.conf.d/99-vds-dualsense.conf'
+          test '${builtins.head defaultEval.services.pipewire.wireplumber.configPackages}' = '${vds}'
           test '${packageOnlyEval.systemd.services.vdsd.serviceConfig.ExecStart}' = '${vds}/bin/vdsd'
           test '${explicitEval.systemd.services.vdsd.serviceConfig.ExecStart}' = '${customVds}/bin/vdsd'
           touch $out

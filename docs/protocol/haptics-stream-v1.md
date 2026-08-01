@@ -162,6 +162,12 @@ Capabilities include:
 - Supported policies.
 - Optional diagnostics features.
 
+The JSONL control command `{"command":"capabilities"}` returns the daemon
+control protocol, haptics stream protocol, and feature names. A missing command
+is treated as an older daemon: legacy companion reports remain usable, but the
+source-aware haptics features stay disabled. A malformed or unsupported reply
+is an incompatible-daemon error.
+
 Unknown major versions are rejected with an explicit error. Optional features
 are negotiated rather than inferred.
 

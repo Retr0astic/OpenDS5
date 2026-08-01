@@ -17,6 +17,7 @@ export interface CompanionTransport extends EventEmitter {
   getFeatureReport(reportId: number, length?: number): Promise<number[]>;
   sendFeatureReport(report: ArrayLike<number>): Promise<void>;
   write(report: ArrayLike<number>): Promise<void>;
+  supportsFeature?(feature: string): boolean;
   close(): void;
 }
 

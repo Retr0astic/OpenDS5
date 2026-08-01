@@ -442,6 +442,12 @@ std::string format_control_error_reply(std::string_view error) {
   return reply;
 }
 
+std::string format_vdsd_capabilities_reply() {
+  return "{\"OK\":true,\"controlProtocol\":4,"
+         "\"hapticsStreamProtocol\":1,\"features\":["
+         "\"source-aware-haptics\",\"haptics-policy-v1\"]}\n";
+}
+
 std::string jsonl_uint64_field(std::string_view key, std::uint64_t value) {
   std::string field = "\"";
   field += key;
@@ -795,6 +801,11 @@ std::string handle_vdsd_control_command(
         throw std::runtime_error("haptics-status format must be json");
       }
       return format_vdsd_control_audio_stats(audio_stats);
+    }
+    if (command == "capabilities") {
+      static constexpr std::string_view expected[] = {"command"};
+      reject_unknown_jsonl_fields(fields, expected, context);
+      return format_vdsd_capabilities_reply();
     }
     if (command == "trace") {
       return handle_trace_control_request(fields, trace_flags, logger);

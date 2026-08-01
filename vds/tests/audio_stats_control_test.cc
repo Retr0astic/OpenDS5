@@ -129,5 +129,14 @@ int main() {
          std::string::npos);
   assert(status.find("\"schemaVersion\":1") != std::string::npos);
 
+  const std::string capabilities = vds::handle_vdsd_control_command(
+      "{\"command\":\"capabilities\"}", "/tmp/no-vds-db", {}, {},
+      [] { return std::vector<vds::ControllerTarget>{}; }, trace_flags,
+      reload_requested, companion, logger, stats);
+  assert(capabilities ==
+         "{\"OK\":true,\"controlProtocol\":4,"
+         "\"hapticsStreamProtocol\":1,\"features\":["
+         "\"source-aware-haptics\",\"haptics-policy-v1\"]}\n");
+
   return 0;
 }

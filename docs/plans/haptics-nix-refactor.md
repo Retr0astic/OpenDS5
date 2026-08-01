@@ -13,6 +13,30 @@ Implement:
 
 The existing repository Nix development flake is the development environment.
 
+## Current execution state
+
+The branch has already completed the following plan work:
+
+- Steps 1–2: instruction/documentation scaffolding and separate Nix package
+  ownership.
+- Step 3: NixOS module ownership, including kernel-parameterized module wiring,
+  udev, WirePlumber, `vdsd`, users, and explicit Bluetooth policy.
+- Step 4: direct normal GUI launch and compatibility/service ownership changes;
+  the privileged portable launcher remains separately named.
+- Step 5: haptics observability and policy plumbing.
+- Step 6: dedicated bounded OpenDS5 haptics IPC stream.
+- Step 7: native-PCM source-aware mixer.
+- Step 8: compatible-rumble synthesis and per-port state arbitration; the
+  implementation and validation are recorded in
+  `docs/superpowers/plans/2026-07-30-haptics-step8-handoff.md`.
+- Step 9: removal of the global lease-era ownership semantics, recorded by
+  commit `971f702` (`refactor: remove lease-era haptics ownership`).
+
+Step 10, integrated validation, documentation, and final review, is complete;
+the result and remaining non-blocking limitations are recorded below. The plan
+descriptions remain the implementation authority, while this section records
+the current branch position.
+
 ## Non-goals
 
 - No unrelated UI redesign.
@@ -486,6 +510,25 @@ Final checkpoint:
 ```sh
 scripts/dev/graphify-checkpoint
 ```
+
+### Step 10 result / handoff
+
+Integrated deterministic validation passed after the reviewed fixes:
+
+- vDS CTest: 9/9 passed.
+- Companion transport tests, typecheck, and production build passed.
+- NixOS module evaluation and `nix flake check -L` passed.
+- Package ownership, normal-launch, capability-handshake, and WirePlumber
+  registration checks passed.
+- Final independent review has no blocking findings.
+- The final Graphify checkpoint passed and rebuilt the repository graph.
+
+One P2 test-quality follow-up remains documented: the app-close regression test
+models the recomputed output-state transition but does not drive the actual
+negotiated-stream HUP/error cleanup path end to end. No live Bluetooth,
+controller, suspend/resume, or hardware-feel validation was performed,
+including Expedition 33 in `off`, `mix`, and `replace`; no physical equivalence
+claim is made.
 
 ## Codex start command
 

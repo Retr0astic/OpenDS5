@@ -1970,7 +1970,11 @@ export class BridgeService extends EventEmitter {
   }
 
   private audioReactiveHapticsSupported(): boolean {
-    return Boolean(this.snapshot.status?.firmwareFlags.audioReactiveHapticsControl);
+    return Boolean(this.snapshot.status?.firmwareFlags.audioReactiveHapticsControl)
+      && (process.platform !== 'linux'
+        || (this.device?.supportsFeature
+          ? this.device.supportsFeature('haptics-policy-v1')
+          : true));
   }
 
   private systemAudioHapticsSupported(): boolean {

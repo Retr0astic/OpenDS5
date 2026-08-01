@@ -69,7 +69,7 @@ Arbitration is evaluated independently for each controller port. A port stays
 in native compatible-rumble mode when no PCM boundary is required. If game or
 OpenDS5 PCM is emitted, the current legacy motor bytes are retained and passed
 through a fixed-cost smoothed synthesizer before mixing; `replace` is the only
-policy that suppresses them. The synthesizer is a calibrated approximation,
+policy that suppresses them. The synthesizer is a provisional approximation,
 not a claim of physical equivalence. Calibration and feel must be validated on
 each controller/firmware family before making that claim.
 

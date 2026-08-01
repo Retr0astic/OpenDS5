@@ -101,6 +101,18 @@ int main() {
   assert(bit(first.state()[kImprovedRumbleOffset], 2));
   assert(bit(first.state()[kPowerSaveOffset], 2));
 
+  // Regression model for a replace-policy app close/crash: keep native mode
+  // while game PCM is active, then restore the game's legacy path when the
+  // app source disappears. The decision is local to this port.
+  first.set_native_haptics_active(true);
+  first.set_audio_out_stream_active(true);
+  assert(!bit(first.state()[0], 1));
+  first.set_audio_out_stream_active(false);
+  first.set_native_haptics_active(false); // app close recomputation
+  assert(bit(first.state()[0], 0));
+  assert(!bit(first.state()[0], 1));
+  assert(bit(first.state()[kPowerSaveOffset], 2));
+
   // Arbitration belongs to one controller/output-state instance only.
   vds::DsOutputState second;
   assert(second.apply_usb_output_report(host_report));

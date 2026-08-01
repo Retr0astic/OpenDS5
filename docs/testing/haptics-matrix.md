@@ -7,7 +7,7 @@ Step 5 coverage verifies persisted `enabled + mode` decoding to explicit
 `vdsctl haptics-status --json` control output. Source/policy arbitration is
 explicit per output-state instance: `replace` suppresses compatible game
 rumble, while source closure restores game state immediately. Game audio-out
-stop is routing-only and cannot clear a policy-derived override. Step 7 has
+stop is routing-only and cannot clear a policy-derived override. Steps 8–9 have
 focused source/policy arbitration tests, including the deterministic
 replace-to-audio-out-stop regression. The source matrix below is covered by
 the mixer and legacy-rumble unit tests. Step 6 has focused framing/queue and
@@ -16,9 +16,9 @@ authorization, malformed packets, bounded overflow, and actuator extraction.
 Step 6 now exercises the production-backed Linux haptics client registry for
 bounded pending-client admission, negotiation expiry, one owner per port,
 disconnect cleanup, and reload owner removal. Physical Bluetooth/controller
-integration remains unvalidated until Step 7 hardware tests.
+integration remains unvalidated until the Step 10 hardware tests.
 Underrun and
-limiting fields remain zero until Step 7 adds their owners.
+limiting fields are covered by the source-aware output tests.
 
 For every policy test:
 

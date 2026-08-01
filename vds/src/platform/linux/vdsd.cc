@@ -2681,6 +2681,12 @@ void close_haptics_client(HapticsClient &client,
     port.legacy_rumble.disconnect();
     port.opends5_haptics_peak_left = 0;
     port.opends5_haptics_peak_right = 0;
+    // Closing an OpenDS5 stream is a source transition, not just queue
+    // cleanup. Recompute the per-port native overlay immediately so replace
+    // cannot suppress the game's legacy rumble after the app exits/crashes.
+    // Game PCM remains native while it is active; otherwise the host's legacy
+    // output state is restored on the next report.
+    port.output_state.set_native_haptics_active(port.audio_out_stream_active);
   }
   client.fd.reset();
   client.negotiation.reset();
